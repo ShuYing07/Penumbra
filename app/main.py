@@ -253,7 +253,7 @@ def _show_welcome_if_first() -> None:
         return
 
     pages = [
-        "👋 欢迎使用 StockAIPredictor\n\n它可以帮你快速了解一只股票的"
+        "👋 欢迎使用 疏影 · 知微\n\n它可以帮你快速了解一只股票的"
         "行情、技术指标与近期新闻（纯数据展示，不替你做决定）。",
         "📊 怎么用？\n\n在中间输入框输入股票代码（如 600519 / AAPL），回车，"
         "右侧会自动画出它的K线，中间用大白话客观描述技术指标。",
@@ -297,7 +297,7 @@ def _show_disclaimer_if_first() -> None:
     box = QMessageBox()
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle("免责声明")
-    box.setText("StockAIPredictor 免责声明")
+    box.setText("疏影 · 知微 免责声明")
     box.setInformativeText(
         "本工具仅用于数据分析和研究学习，不构成任何投资建议。\n\n"
         "本工具不提供证券投资咨询业务，未取得中国证监会证券投资咨询业务资格，"

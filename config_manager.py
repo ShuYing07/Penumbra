@@ -99,7 +99,7 @@ def update_channel() -> str:
 
 # ---------- 版本与更新检查 ----------
 APP_VERSION = "0.1.0"
-REPO_API = "https://api.github.com/repos/ShuYing07/StockAIPredictor/releases/latest"
+REPO_API = "https://api.github.com/repos/ShuYing07/Penumbra/releases/latest"
 
 
 def check_update(timeout: float = 6.0) -> dict:

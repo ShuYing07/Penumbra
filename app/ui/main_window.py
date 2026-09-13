@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(
                 self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), self)
-            self.tray.setToolTip("StockAIPredictor 盯盘")
+            self.tray.setToolTip("疏影 · 知微 盯盘")
             self.tray.messageClicked.connect(self.showNormal)
             self.tray.show()
 
@@ -166,7 +166,7 @@ class MainWindow(QMainWindow):
         from urllib.parse import quote
         import webbrowser
 
-        REPO = "https://github.com/ShuYing07/StockAIPredictor"
+        REPO = "https://github.com/ShuYing07/Penumbra"
         dlg = QDialog(self)
         dlg.setWindowTitle("意见反馈")
         lay = QVBoxLayout(dlg)
