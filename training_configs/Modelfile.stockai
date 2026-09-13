@@ -1,0 +1,19 @@
+# StockAIPredictor 蒸馏模型 Ollama 导入模板（ChatML，Qwen2.5 系）
+# 用法：ollama create stockai-qwen-curriculum -f training_configs/Modelfile.stockai
+# FROM 指向 merge_lora.yaml 导出的合并目录（safetensors），Ollama 0.34+ 自动量化到 Q4_K_M
+# 兜底：若直导失败，先用 llama.cpp 把 merged 转 GGUF 再量化，FROM 改指向 .gguf 文件
+
+FROM D:/StockAIPredictor/data/training/merged
+
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>"""
+
+PARAMETER temperature 0.3
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|im_start|>"
+
+SYSTEM "你是金融分析助手，遵循指令输出结构化分析。"

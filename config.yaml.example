@@ -1,0 +1,25 @@
+# StockAIPredictor 示例配置文件
+# 复制为 config.yaml 后按需修改；本文件仅作示例，不含任何真实密钥。
+
+# 模型与后端
+model:
+  fast_model: qwen-max          # 主分析模型
+  backend: deepseek             # deepseek / local / auto
+  temperature: 0.3
+
+# 多模型辩论（可选）
+debate:
+  enabled: false                # true 时裁决节点走第二模型(GLM)
+  premium_nodes:                # 这些节点走高级模型
+    - trader
+    - risk
+    - portfolio
+
+# 结果缓存（秒），同标的短时间重复分析直接返回
+cache:
+  ttl_seconds: 300
+
+# 数据源
+data:
+  preferred_source: akshare     # akshare / tushare
+  timeout_seconds: 20

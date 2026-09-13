@@ -1,0 +1,19 @@
+# CODEOWNERS：以下路径的变更需要指定审查者同意。
+# 上线后请把 @ShuYing07 替换为实际维护者 GitHub 账号。
+
+# 默认审查者（所有路径）
+* @ShuYing07
+
+# 敏感路径：CI/工作流必须审查
+/.github/workflows/ @ShuYing07
+
+# 合规核心：AI 分析与提示词必须审查
+/core/agents/ @ShuYing07
+/prompts.py @ShuYing07
+/core/config.py @ShuYing07
+/config_manager.py @ShuYing07
+
+# 开源合规文件必须审查
+/DISCLAIMER.md @ShuYing07
+/PRIVACY.md @ShuYing07
+/TERMS_OF_SERVICE.md @ShuYing07
