@@ -221,6 +221,12 @@ def main() -> int:
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
     app.setApplicationName("StockAIPredictor")
+    # 应用级图标：任务栏/所有窗口统一 logo
+    import os as _os
+    from PyQt6.QtGui import QIcon as _QIcon
+    _ico = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "app.ico")
+    if _os.path.exists(_ico):
+        app.setWindowIcon(_QIcon(_ico))
     try:
         from app.ui.theme import apply_dark_theme
         apply_dark_theme(app)
@@ -234,39 +240,6 @@ def main() -> int:
     win.show()
     _show_welcome_if_first()
     return app.exec()
-
-
-def _show_disclaimer_if_first() -> None:
-    """首次启动弹出免责声明确认；用户点'我已阅读并理解'后不再弹。"""
-    from PyQt6.QtCore import QSettings
-    from PyQt6.QtWidgets import QMessageBox
-
-    settings = QSettings("StockAI", "StockAIPredictor")
-    if settings.value("disclaimer_accepted", False, type=bool):
-        return
-    box = QMessageBox()
-    box.setIcon(QMessageBox.Icon.Warning)
-    box.setWindowTitle("免责声明")
-    box.setText("StockAIPredictor 免责声明")
-    box.setInformativeText(
-        "本工具仅用于数据分析和研究学习，不构成任何投资建议。\n\n"
-        "本工具不提供证券投资咨询业务，未取得中国证监会证券投资咨询业务资格，"
-        "不提供任何具体证券品种的分析意见、买卖建议或价格走势预测。\n\n"
-        "所有输出均为客观历史数据展示与统计，不保证数据准确性与完整性。"
-        "用户应自行判断并承担投资决策的全部风险，开发者不对任何投资损失承担责任。\n\n"
-        "点击「我已阅读并理解」表示你已充分知晓上述风险。"
-    )
-    box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    box.button(QMessageBox.StandardButton.Yes).setText("我已阅读并理解")
-    box.button(QMessageBox.StandardButton.No).setText("退出")
-    if box.exec() == QMessageBox.StandardButton.Yes:
-        settings.setValue("disclaimer_accepted", True)
-    else:
-        raise SystemExit(0)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 def _show_welcome_if_first() -> None:
@@ -311,3 +284,37 @@ def _show_welcome_if_first() -> None:
     btn.clicked.connect(advance)
     lay.addWidget(btn)
     dlg.exec()
+
+
+def _show_disclaimer_if_first() -> None:
+    """首次启动弹出免责声明确认；用户点'我已阅读并理解'后不再弹。"""
+    from PyQt6.QtCore import QSettings
+    from PyQt6.QtWidgets import QMessageBox
+
+    settings = QSettings("StockAI", "StockAIPredictor")
+    if settings.value("disclaimer_accepted", False, type=bool):
+        return
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("免责声明")
+    box.setText("StockAIPredictor 免责声明")
+    box.setInformativeText(
+        "本工具仅用于数据分析和研究学习，不构成任何投资建议。\n\n"
+        "本工具不提供证券投资咨询业务，未取得中国证监会证券投资咨询业务资格，"
+        "不提供任何具体证券品种的分析意见、买卖建议或价格走势预测。\n\n"
+        "所有输出均为客观历史数据展示与统计，不保证数据准确性与完整性。"
+        "用户应自行判断并承担投资决策的全部风险，开发者不对任何投资损失承担责任。\n\n"
+        "点击「我已阅读并理解」表示你已充分知晓上述风险。"
+    )
+    box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    box.button(QMessageBox.StandardButton.Yes).setText("我已阅读并理解")
+    box.button(QMessageBox.StandardButton.No).setText("退出")
+    if box.exec() == QMessageBox.StandardButton.Yes:
+        settings.setValue("disclaimer_accepted", True)
+    else:
+        raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
