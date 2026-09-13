@@ -29,8 +29,13 @@ from core.config import DISCLAIMER, DATA_DIR
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("StockAIPredictor · 虚拟股票预测（学习研究版）")
+        self.setWindowTitle("疏影 · 知微")
         self.resize(1200, 800)
+        import os as _os
+        _ico = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__)))), "assets", "app.ico")
+        if _os.path.exists(_ico):
+            self.setWindowIcon(QIcon(_ico))
 
         self.watchlist_tab = WatchlistTab()
         self.chat_tab = ChatTab()
