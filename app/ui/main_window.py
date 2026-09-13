@@ -11,8 +11,10 @@ from PyQt6.QtWidgets import (QLabel, QMainWindow, QStatusBar, QStyle, QSystemTra
 from app.ui.analysis_tab import AnalysisTab
 from app.ui.backtest_tab import BacktestTab
 from app.ui.chat_tab import ChatTab
+from app.ui.debate_tab import DebateTab
 from app.ui.chart_tab import ChartTab
 from app.ui.history_tab import HistoryTab
+from app.ui.industry_tab import IndustryTab
 from app.ui.knowledge_tab import KnowledgeTab
 from app.ui.optimize_tab import OptimizeTab
 from app.ui.overview_tab import OverviewTab
@@ -42,6 +44,8 @@ class MainWindow(QMainWindow):
         self.replay_tab = ReplayTab()
         self.knowledge_tab = KnowledgeTab()
         self.history_tab = HistoryTab()
+        self.industry_tab = IndustryTab()
+        self.debate_tab = DebateTab()
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.chat_tab, "对话分析")
@@ -56,6 +60,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.replay_tab, "信号回放")
         self.tabs.addTab(self.knowledge_tab, "学习库")
         self.tabs.addTab(self.history_tab, "决策记录")
+        self.tabs.addTab(self.industry_tab, "产业图谱")
+        self.tabs.addTab(self.debate_tab, "多空辩论")
         self.setCentralWidget(self.tabs)
 
         # 开发者调试面板：仅 DEV_MODE=true 时显示，否则完全隐藏
