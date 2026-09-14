@@ -224,8 +224,21 @@ def main() -> int:
     # 应用级图标：任务栏/所有窗口统一 logo
     import os as _os
     from PyQt6.QtGui import QIcon as _QIcon
-    _ico = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "assets", "app.ico")
-    if _os.path.exists(_ico):
+
+    def _find_ico() -> str:
+        candidates = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(_os.path.join(meipass, "assets", "app.ico"))
+        proj_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        candidates.append(_os.path.join(proj_root, "assets", "app.ico"))
+        for c in candidates:
+            if _os.path.exists(c):
+                return c
+        return ""
+
+    _ico = _find_ico()
+    if _ico:
         app.setWindowIcon(_QIcon(_ico))
     try:
         from app.ui.theme import apply_dark_theme

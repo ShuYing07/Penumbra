@@ -31,11 +31,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("疏影 · 知微")
         self.resize(1200, 800)
-        import os as _os
-        _ico = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
-            _os.path.abspath(__file__)))), "assets", "app.ico")
-        if _os.path.exists(_ico):
-            self.setWindowIcon(QIcon(_ico))
+        import os as _os, sys as _sys
+        _cands = []
+        _mp = getattr(_sys, "_MEIPASS", None)
+        if _mp:
+            _cands.append(_os.path.join(_mp, "assets", "app.ico"))
+        _cands.append(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__)))), "assets", "app.ico"))
+        for _ico in _cands:
+            if _os.path.exists(_ico):
+                self.setWindowIcon(QIcon(_ico))
+                break
 
         self.watchlist_tab = WatchlistTab()
         self.chat_tab = ChatTab()
