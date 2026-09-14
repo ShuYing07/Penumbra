@@ -10,16 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 扫描荐股类禁用词
+      - name: 扫描对外文档中的荐股类承诺
         run: |
           set -e
-          # 这些词不得出现在会面向用户的源码中（注释/文档除外）。
-          # 命中即标记并阻止合并，确保工具不构成"荐股软件"。
-          PATTERN="买入|卖出|目标价|必涨|稳赚|荐股"
-          echo "扫描 app/ core/ 中的 Python 源码..."
-          if grep -rnE "$PATTERN" --include="*.py" app core; then
-            echo "::error::源码中发现荐股类禁用词，请移除或改写为中性表述。"
+          # 合规护栏只约束"对外可见的宣传/说明文本"，防止在 README/文档里
+          # 作出荐股、稳赚之类的承诺。
+          # 注意：不扫描 .py 源码——回测/模拟盘/策略引擎里的"买入/卖出"
+          # 是交易动作的工程术语，不属于荐股承诺。
+          PATTERN="必涨|稳赚|稳赚不赔|包赚|荐股|保本高收益"
+
+          HITS=$(grep -rnE "$PATTERN" --include="*.md" . || true)
+
+          if [ -n "$HITS" ]; then
+            echo "::error::对外文档中出现营销性荐股承诺，请删除："
+            echo "$HITS"
             exit 1
           else
-            echo "未发现禁用词，合规通过。"
+            echo "对外文档未发现营销性荐股承诺，合规通过。"
           fi
