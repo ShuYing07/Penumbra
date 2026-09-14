@@ -115,6 +115,29 @@ class MainWindow(QMainWindow):
         help_menu.addAction("检查更新", self._check_update)
         help_menu.addAction("❤️ 支持开发者", self._open_sponsor)
 
+        # 启动公告：延迟弹出，提示用户去 GitHub 查看最新版本
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(600, self._show_announcement)
+
+    def _show_announcement(self) -> None:
+        import webbrowser
+        from config_manager import APP_VERSION, RELEASES_URL
+        box = QMessageBox(self)
+        box.setWindowTitle("欢迎使用 疏影 · 知微")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"当前版本 v{APP_VERSION}\n\n"
+            "📢 更新说明：\n"
+            "本工具不架设自己的更新服务器，所有新版本与更新日志\n"
+            "都会第一时间发布在 GitHub Releases 页面。\n"
+            "建议定期去查看新版本，以获得更稳定的体验与新功能。\n\n"
+            "⚠️ 本工具仅供研究学习，不构成投资建议。")
+        btn_web = box.addButton("查看最新版本", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("知道了", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is btn_web:
+            webbrowser.open(RELEASES_URL)
+
     def _on_analysis_done(self, result: dict) -> None:
         self.history_tab.refresh()
         self.paper_tab.refresh()
@@ -199,20 +222,28 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _check_update(self) -> None:
-        from config_manager import check_update, APP_VERSION
+        import webbrowser
+        from config_manager import check_update, APP_VERSION, RELEASES_URL
         res = check_update()
-        if res.get("error"):
-            QMessageBox.information(self, "检查更新",
-                                    f"无法连接更新服务器（{res['error']}）。\n当前版本 {APP_VERSION}。")
-            return
-        if res["has_update"]:
-            QMessageBox.information(
-                self, "检查更新",
+        url = res.get("url") or RELEASES_URL
+        box = QMessageBox(self)
+        box.setWindowTitle("检查更新")
+        if res.get("has_update"):
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(
                 f"发现新版本：v{res['latest']}（当前 v{APP_VERSION}）。\n"
-                f"请自行前往 GitHub Release 查看并下载，程序不会自动更新。\n{res['url'] or ''}")
+                f"程序不会自动更新，请前往 GitHub Releases 查看与下载。")
         else:
-            QMessageBox.information(self, "检查更新",
-                                    f"已是最新版本 v{APP_VERSION}。")
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(
+                f"当前版本 v{APP_VERSION}。\n"
+                f"我们不架设自己的更新服务器，所有版本与更新说明都发布在\n"
+                f"GitHub Releases 页面，点下方按钮即可查看。")
+        btn_web = box.addButton("前往 GitHub Releases", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is btn_web:
+            webbrowser.open(url)
 
     def _open_sponsor(self) -> None:
         import webbrowser
@@ -235,7 +266,7 @@ class MainWindow(QMainWindow):
             chosen["amount"] = amt
 
         row_btns = QHBoxLayout()
-        for amt in (5, 10, 20, 50):
+        for amt in (10, 50, 200):
             b = QPushButton(f"¥{amt}")
             b.setStyleSheet(
                 "background-color:#2F81F7; color:white; border-radius:5px; padding:5px;")

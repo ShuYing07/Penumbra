@@ -100,6 +100,8 @@ def update_channel() -> str:
 # ---------- 版本与更新检查 ----------
 APP_VERSION = "0.1.0"
 REPO_API = "https://api.github.com/repos/ShuYing07/Penumbra/releases/latest"
+REPO_URL = "https://github.com/ShuYing07/Penumbra"
+RELEASES_URL = "https://github.com/ShuYing07/Penumbra/releases"
 
 
 def check_update(timeout: float = 6.0) -> dict:
@@ -112,16 +114,17 @@ def check_update(timeout: float = 6.0) -> dict:
     import urllib.request
 
     out = {"current": APP_VERSION, "latest": APP_VERSION,
-           "has_update": False, "url": None, "error": None}
+           "has_update": False, "url": RELEASES_URL, "error": None}
     try:
         req = urllib.request.Request(
             REPO_API, headers={"User-Agent": "StockAIPredictor"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
         out["latest"] = data.get("tag_name", APP_VERSION).lstrip("vV")
-        out["url"] = data.get("html_url")
+        out["url"] = data.get("html_url") or RELEASES_URL
         out["has_update"] = out["latest"] != APP_VERSION
     except Exception as e:  # noqa: BLE001
+        # 无 Release / 网络不可达：不报错，直接引导用户去 Releases 页
         out["error"] = str(e)[:160]
     return out
 
