@@ -26,6 +26,11 @@
 
 程序会在本机的 `data/` 目录下缓存行情、新闻、分析历史等文件，仅用于加速与复盘。删除该目录即可清除全部本地数据。
 
+## 合规说明（GDPR / CCPA）
+
+本程序按设计满足 GDPR 与 CCPA 要求：不处理、不上传任何用户个人数据。
+"This application is compliant with GDPR and CCPA requirements by design, as no user data is ever processed or transferred."
+
 ## 儿童隐私
 
 本程序**不面向 13 岁以下儿童**，亦不会有意收集任何未成年人信息。

@@ -1,0 +1,25 @@
+name: Compliance Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  forbidden-words:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 扫描荐股类禁用词
+        run: |
+          set -e
+          # 这些词不得出现在会面向用户的源码中（注释/文档除外）。
+          # 命中即标记并阻止合并，确保工具不构成"荐股软件"。
+          PATTERN="买入|卖出|目标价|必涨|稳赚|荐股"
+          echo "扫描 app/ core/ 中的 Python 源码..."
+          if grep -rnE "$PATTERN" --include="*.py" app core; then
+            echo "::error::源码中发现荐股类禁用词，请移除或改写为中性表述。"
+            exit 1
+          else
+            echo "未发现禁用词，合规通过。"
+          fi
