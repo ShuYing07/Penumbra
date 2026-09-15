@@ -163,6 +163,26 @@ python -m app.main
 
 ---
 
+## 🧾 决策日志与复盘
+
+每次 AI 分析都会自动落库（本地 SQLite），在「分析日志」标签页可查看：时间、股票、分析类型、模型、置信度，点击任意记录查看完整报告，并支持导出为 CSV/JSON。「研究笔记」功能可给个股添加个人笔记，复盘报告汇总期间分析与置信度分布。
+
+## 📊 技术指标与形态识别
+
+技术面在经典 MA/MACD/RSI/KDJ/BOLL/ATR 基础上，扩展了 **CCI、WR、BIAS、OBV、VR、量比、BB 宽度、ADX/DMI、EMA12/26** 等指标；形态识别模块可自动标注 **W 底（双底）、M 头（双顶）**，其余形态（头肩、杯柄、三角）预留扩展位。所有计算无未来函数。
+
+## 🛡️ 合规审计
+
+所有 AI 输出经过合规过滤与审计留痕（`audit_trail`）：记录模型、System Prompt 指纹、命中的禁用词与人工处理动作。详见 [COMPLIANCE_GUIDE.md](COMPLIANCE_GUIDE.md)。本软件不构成投资建议，不是荐股软件。
+
+## 📄 报告导出
+
+在分析结果处可一键导出 Markdown / HTML 报告，自动保存到 `D:\StockAI_Knowledge\reports\`，含技术指标表、多空要点、形态、数据来源与免责声明。
+
+架构详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+---
+
 ## 📄 许可证
 
 [MIT License](LICENSE) © 2026 ShuYing07 (疏影 · 知微)。本软件仅供研究学习使用，按“现状”提供，不附带任何形式的保证。

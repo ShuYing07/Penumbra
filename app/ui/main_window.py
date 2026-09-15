@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import (QLabel, QMainWindow, QStatusBar, QStyle, QSystemTra
                              QMessageBox, QTextEdit, QComboBox)
 
 from app.ui.analysis_tab import AnalysisTab
+from app.ui.analysis_log_tab import AnalysisLogTab
+from app.ui.compliance_audit_tab import ComplianceAuditTab
 from app.ui.backtest_tab import BacktestTab
 from app.ui.chat_tab import ChatTab
 from app.ui.debate_tab import DebateTab
@@ -55,6 +57,8 @@ class MainWindow(QMainWindow):
         self.replay_tab = ReplayTab()
         self.knowledge_tab = KnowledgeTab()
         self.history_tab = HistoryTab()
+        self.analysis_log_tab = AnalysisLogTab()
+        self.compliance_audit_tab = ComplianceAuditTab()
         self.industry_tab = IndustryTab()
         self.debate_tab = DebateTab()
 
@@ -71,6 +75,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.replay_tab, "信号回放")
         self.tabs.addTab(self.knowledge_tab, "学习库")
         self.tabs.addTab(self.history_tab, "决策记录")
+        self.tabs.addTab(self.analysis_log_tab, "分析日志")
+        self.tabs.addTab(self.compliance_audit_tab, "合规审计")
         self.tabs.addTab(self.industry_tab, "产业图谱")
         self.tabs.addTab(self.debate_tab, "多空辩论")
         self.setCentralWidget(self.tabs)
@@ -141,9 +147,50 @@ class MainWindow(QMainWindow):
     def _on_analysis_done(self, result: dict) -> None:
         self.history_tab.refresh()
         self.paper_tab.refresh()
+        self._log_analysis(result)
         ticker = (result.get("state") or {}).get("ticker")
         if ticker:
             self.chart_tab.load(ticker)
+
+    def _log_analysis(self, result: dict) -> None:
+        """把本次 AI 分析落库到 decision_logger（任何失败不影响主流程）。"""
+        try:
+            from decision_logger import log_decision
+            from schemas import parse_structured
+            state = result.get("state") or {}
+            ticker = state.get("ticker", "")
+            if not ticker:
+                return
+            final = state.get("final") or {}
+            tokens = state.get("tokens") or {}
+            # 完整报告文本作为 raw_output
+            try:
+                from core.report import render as render_report
+                raw_text = render_report(state)
+            except Exception:  # noqa: BLE001
+                raw_text = final.get("summary", "")
+            # 结构化输出尝试解析
+            payload = {
+                "indicators": state.get("tech") or {},
+                "summary": final.get("summary", ""),
+                "data_sources": state.get("sources") or [],
+                "confidence": final.get("confidence") or 50,
+            }
+            structured, _ok = parse_structured("technical", raw_text, payload)
+            log_decision(
+                stock_code=ticker,
+                stock_name=state.get("name", "") or ticker,
+                model_used=tokens.get("model", ""),
+                analysis_type="综合分析",
+                raw_output=raw_text,
+                structured_output=structured,
+                confidence_score=final.get("confidence"),
+                data_sources=state.get("sources") or [],
+            )
+            if hasattr(self, "analysis_log_tab"):
+                self.analysis_log_tab.refresh()
+        except Exception:  # noqa: BLE001 - 日志失败静默
+            pass
 
     def _on_watchlist_analyze(self, ticker: str) -> None:
         self.analysis_tab.input.setText(ticker)

@@ -82,6 +82,81 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Se
     return tr.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
 
 
+def cci(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """CCI(14) 顺势指标。"""
+    tp = (high + low + close) / 3.0
+    ma_tp = tp.rolling(n, min_periods=n).mean()
+    md = tp.rolling(n, min_periods=n).apply(
+        lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+    return (tp - ma_tp) / (0.015 * md.replace(0.0, np.nan))
+
+
+def wr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """威廉指标 WR(14)，国内口径 (HHV-C)/(HHV-LLV)*100。"""
+    hh = high.rolling(n, min_periods=n).max()
+    ll = low.rolling(n, min_periods=n).min()
+    return (hh - close) / (hh - ll).replace(0.0, np.nan) * 100.0
+
+
+def bias(close: pd.Series, n: int) -> pd.Series:
+    """BIAS(n) = (close - MA(n))/MA(n)*100。"""
+    m = sma(close, n)
+    return (close - m) / m.replace(0.0, np.nan) * 100.0
+
+
+def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """OBV 能量潮。"""
+    direction = np.sign(close.diff().fillna(0.0))
+    return (direction * volume).cumsum()
+
+
+def vr(close: pd.Series, volume: pd.Series, n: int = 26) -> pd.Series:
+    """VR(26) 容量比率：上涨日量和 / 下跌日量和 *100。"""
+    up = volume.where(close > close.shift(1), 0.0)
+    down = volume.where(close < close.shift(1), 0.0)
+    up_sum = up.rolling(n, min_periods=n).sum()
+    down_sum = down.rolling(n, min_periods=n).sum()
+    return up_sum / down_sum.replace(0.0, np.nan) * 100.0
+
+
+def bb_width(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.Series:
+    """布林带宽度 = (上轨-下轨)/中轨。"""
+    mid, up, low = boll(close, n, k)
+    return (up - low) / mid.replace(0.0, np.nan)
+
+
+def adx_dmi(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14):
+    """返回 (ADX, +DI, -DI)。Wilder 平滑。"""
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr_n = tr.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+    plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean() / atr_n.replace(0.0, np.nan)
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean() / atr_n.replace(0.0, np.nan)
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    adx = dx.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+    return adx, plus_di, minus_di
+
+
+def turnover_ratio(volume: pd.Series, float_shares: float | None = None) -> pd.Series | None:
+    """换手率 = volume / 流通股本。缺流通股本返回 None（快照中记为 —）。"""
+    if not float_shares:
+        return None
+    return volume / float_shares * 100.0
+
+
+def vol_ratio(volume: pd.Series, n: int = 5) -> pd.Series:
+    """量比 = 当日量 / 过去 n 日均量。"""
+    return volume / volume.rolling(n, min_periods=1).mean().replace(0.0, np.nan)
+
+
 def _f(x) -> float | None:
     try:
         if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
@@ -111,6 +186,15 @@ def latest_snapshot(df: pd.DataFrame, bars_required: int = 60) -> dict[str, Any]
     k, d, j = kdj(high, low, close)
     _, boll_up, boll_low = boll(close)
     atr14 = atr(high, low, close)
+
+    # 扩展指标（模块二）
+    cci14 = cci(high, low, close, 14)
+    wr14 = wr(high, low, close, 14)
+    bias6, bias12 = bias(close, 6), bias(close, 12)
+    adx14, plus_di, minus_di = adx_dmi(high, low, close, 14)
+    bbw = bb_width(close)
+    obv1 = obv(close, vol)
+    vr26 = vr(close, vol, 26)
 
     lookback = {n: (df.index[-1].strftime("%Y-%m-%d"),
                     _pct(float(close.iloc[-1]), float(close.iloc[-1 - n])))
@@ -148,4 +232,17 @@ def latest_snapshot(df: pd.DataFrame, bars_required: int = 60) -> dict[str, Any]
         "low_60d": _f(lo60),
         "pos_in_60d_pct": _pct(float(last), lo60) and round((float(last) - lo60) / (hi60 - lo60) * 100, 1)
         if hi60 > lo60 else None,
+        # ---- 模块二扩展指标 ----
+        "cci14": _f(cci14.iloc[-1]),
+        "wr14": _f(wr14.iloc[-1]),
+        "bias6": _f(bias6.iloc[-1]),
+        "bias12": _f(bias12.iloc[-1]),
+        "adx14": _f(adx14.iloc[-1]),
+        "plus_di": _f(plus_di.iloc[-1]),
+        "minus_di": _f(minus_di.iloc[-1]),
+        "bb_width": _f(bbw.iloc[-1]),
+        "obv": _f(obv1.iloc[-1]),
+        "vr26": _f(vr26.iloc[-1]),
+        "ema12": _f(ema(close, 12).iloc[-1]),
+        "ema26": _f(ema(close, 26).iloc[-1]),
     }
