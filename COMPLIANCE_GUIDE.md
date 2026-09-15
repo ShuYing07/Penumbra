@@ -5,7 +5,7 @@
 ## 一、三层合规防护
 
 1. **入口拦截**：程序启动弹出强制免责声明确认，必须勾选才能进入。
-2. **过程拦截**：所有 AI 输出经过 `core/compliance.py` 的 `sanitize_ai_output`，命中"买入/卖出/推荐/目标价/必涨"等词时替换为【已过滤】，并自动追加免责声明。
+2. **过程拦截**：所有 AI 输出经过 `core/compliance.py` 的 `sanitize_ai_output`，命中预设敏感词表时替换为【已过滤】，并自动追加免责声明。
 3. **审计留痕**：每次分析写入 `core/audit_trail.py`（`data/audit_trail.db`）。
 
 ## 二、审计记录内容
