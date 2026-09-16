@@ -6,9 +6,7 @@
 1. **必须等 CI 跑完再宣布成功**：push 后用
    `GET /repos/{owner}/{repo}/actions/runs?per_page=1`
    看最新 run 的 `conclusion == success`。红色就修，不许装没看见。
-2. **合规词表会扫 *.md**：写文档举例"买入/卖出/必涨/目标价"等词时，
-   不要把它们原样写进 .md（CI 的 grep 会命中）。写成"预设敏感词表"即可。
-   本地复跑命令：词表 `必涨|稳赚|包赚|保本高收益|一定涨|翻倍|年化.*%.*稳`。
+2. **合规词表会扫 *.md**：写文档举例时，不要把词表里的收益承诺类敏感词原样写进 .md（CI 的 grep 会命中）。需要举例时统一写"预设敏感词表"即可，完整词表见 `.github/workflows/compliance_check.yml`。
 
 ## 上传 Release 资产
 3. **浏览器 UI 传大文件不可靠**：点 "1 file selected" ≠ 传完。
