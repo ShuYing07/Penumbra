@@ -65,6 +65,28 @@ def ensure_configured() -> tuple[bool, str]:
     return True, f"已加载 API Key：{mask_key(key)}"
 
 
+def save_deepseek_key(key: str) -> None:
+    """把用户粘贴的 key 写入 .env（GUI 首次配置用，不打印明文）。"""
+    key = key.strip()
+    lines = []
+    if ENV_PATH.exists():
+        try:
+            lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+        except Exception:  # noqa: BLE001
+            lines = []
+    out, found = [], False
+    for line in lines:
+        if line.strip().startswith("DEEPSEEK_API_KEY="):
+            out.append(f"DEEPSEEK_API_KEY={key}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"DEEPSEEK_API_KEY={key}")
+    ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ["DEEPSEEK_API_KEY"] = key
+
+
 def is_dev_mode() -> bool:
     """是否开启开发者模式（功能开关）。
 

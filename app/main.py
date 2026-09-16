@@ -249,6 +249,7 @@ def main() -> int:
     from app.ui.main_window import MainWindow
 
     _show_disclaimer_if_first()
+    _show_api_key_if_first()
     win = MainWindow()
     win.show()
     _show_welcome_if_first()
@@ -326,6 +327,46 @@ def _show_disclaimer_if_first() -> None:
         settings.setValue("disclaimer_accepted", True)
     else:
         raise SystemExit(0)
+
+
+def _show_api_key_if_first() -> None:
+    """首次启动（或未配置key）弹出输入框，让用户直接粘贴key，自动写入.env。"""
+    from PyQt6.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton,
+                                 QVBoxLayout)
+    from config_manager import ensure_configured, save_deepseek_key
+
+    ok, _ = ensure_configured()
+    if ok:
+        return
+
+    dlg = QDialog()
+    dlg.setWindowTitle("首次配置 API Key")
+    dlg.setMinimumWidth(520)
+    lay = QVBoxLayout(dlg)
+    lay.addWidget(QLabel(
+        "欢迎使用疏影·知微！\n\n"
+        "程序需要一个 AI 接口 Key 才能生成分析报告（数据行情展示不需要 Key）。\n\n"
+        "1. 去阿里云百炼 https://bailian.console.aliyun.com 申请一个免费 Key（以 sk- 开头）\n"
+        "2. 粘贴到下面输入框，点「保存并开始」\n\n"
+        "Key 只保存在你本机，不会上传。"
+    ))
+    inp = QLineEdit()
+    inp.setPlaceholderText("粘贴你的 API Key（sk-...）")
+    lay.addWidget(inp)
+    btn = QPushButton("保存并开始")
+    lay.addWidget(btn)
+
+    def _save() -> None:
+        k = inp.text().strip()
+        if not k:
+            QMessageBox.warning(dlg, "提示", "请粘贴 API Key")
+            return
+        save_deepseek_key(k)
+        dlg.accept()
+
+    btn.clicked.connect(_save)
+    inp.returnPressed.connect(_save)
+    dlg.exec()
 
 
 if __name__ == "__main__":
