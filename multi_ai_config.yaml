@@ -1,0 +1,39 @@
+# 多AI协同配置
+# Key 从环境变量读取（推荐），或直接填在下面（占位符改成真实key）
+
+providers:
+  deepseek_pro:
+    base_url: "https://api.deepseek.com"
+    api_key: "sk-xxxx"
+    model: "deepseek-chat"
+    role: "planner"
+
+  siliconflow:
+    base_url: "https://api.siliconflow.cn/v1"
+    api_key: "sk-xxxx"
+    model: "deepseek-ai/DeepSeek-V3"
+    role: "executor"
+
+  groq:
+    base_url: "https://api.groq.com/openai/v1"
+    api_key: "gsk_xxxx"
+    model: "llama-3.3-70b-versatile"
+    role: "executor"
+
+  qwen:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: "sk-xxxx"
+    model: "qwen-max"
+    role: "reviewer"
+
+  glm:
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    api_key: "xxxx.xxxx"
+    model: "glm-4-flash"
+    role: "reviewer"
+
+routing:
+  planner: "deepseek_pro"
+  executor: ["siliconflow", "groq"]
+  reviewer: "glm"
+  fallback: ["qwen", "glm"]
