@@ -5,7 +5,7 @@ providers:
   deepseek_pro:
     base_url: "https://api.deepseek.com"
     api_key: "sk-xxxx"
-    model: "deepseek-chat"
+    model: "deepseek-v4-pro"
     role: "planner"
 
   siliconflow:
@@ -23,13 +23,13 @@ providers:
   qwen:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     api_key: "sk-xxxx"
-    model: "qwen-max"
+    model: "qwen-max-latest"
     role: "reviewer"
 
   glm:
-    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    base_url: "https://open.bigmodel.cn/api/coding/paas/v4"
     api_key: "xxxx.xxxx"
-    model: "glm-4-flash"
+    model: "glm-4.7-flash"
     role: "reviewer"
 
 routing:
