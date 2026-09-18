@@ -20,9 +20,15 @@ import yaml
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "multi_ai_config.yaml"
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
 # 环境变量名映射（优先从环境变量读key，yaml里写占位符也行）
 ENV_MAP = {
-    "deepseek_pro": "DEEPSEEK_API_KEY",
+    "deepseek_pro": "DEEPSEEK_PRO_API_KEY",
     "siliconflow": "SILICONFLOW_API_KEY",
     "groq": "GROQ_API_KEY",
     "qwen": "QWEN_API_KEY",

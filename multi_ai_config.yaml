@@ -17,13 +17,13 @@ providers:
   groq:
     base_url: "https://api.groq.com/openai/v1"
     api_key: "gsk_xxxx"
-    model: "llama-3.3-70b-versatile"
+    model: "openai/gpt-oss-120b"
     role: "executor"
 
   qwen:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     api_key: "sk-xxxx"
-    model: "qwen-max-latest"
+    model: "qwen-max"
     role: "reviewer"
 
   glm:
