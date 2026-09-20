@@ -228,15 +228,28 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
 
 
 def build_graph(runner: LLMRunner):
+    """串行DAG编排（稳定优先）：
+    - START → technical → fundamental → news → sentiment
+    - 4分析师完成 → bull → bear → trader → risk → END
+    """
     builder = StateGraph(AnalysisState)
     for name, fn in bind(runner):
         builder.add_node(name, fn)
-    order = ["technical", "fundamental", "news", "sentiment",
-             "bull", "bear", "trader", "risk"]
-    builder.add_edge(START, order[0])
-    for a, b in zip(order, order[1:]):
-        builder.add_edge(a, b)
-    builder.add_edge(order[-1], END)
+
+    # 串行执行4个分析师
+    builder.add_edge(START, "technical")
+    builder.add_edge("technical", "fundamental")
+    builder.add_edge("fundamental", "news")
+    builder.add_edge("news", "sentiment")
+
+    # 多空辩论
+    builder.add_edge("sentiment", "bull")
+    builder.add_edge("bull", "bear")
+
+    # trader → risk → END
+    builder.add_edge("bear", "trader")
+    builder.add_edge("trader", "risk")
+    builder.add_edge("risk", END)
     return builder.compile(checkpointer=MemorySaver())
 
 
@@ -271,22 +284,41 @@ def degraded_nodes(state: dict) -> list[str]:
 
 def execute_state(state: dict, runner: LLMRunner, progress_cb=None,
                   thread_suffix: str | None = None) -> dict:
-    """对已采集的 state 跑 LangGraph 8 节点，返回补全 final 的 state（不落库）。"""
+    """对已采集的 state 跑 LangGraph 多节点DAG，返回补全 final 的 state（不落库）。
+
+    并行模式：4分析师并行 → 多空并行 → trader → risk。
+    额外追踪每个节点的耗时，写入 state["node_timing"]。
+    """
+    import time
     graph = build_graph(runner)
     suffix = thread_suffix or now_cn().strftime("%Y%m%d%H%M%S")
     thread_id = f"{state['ticker'].upper()}-{suffix}"
     config = {"configurable": {"thread_id": thread_id}}
+
+    node_timing: dict[str, dict] = {}
+    result = dict(state)
     if progress_cb is None:
         result = graph.invoke(state, config=config)
     else:
-        result = dict(state)
+        node_start: dict[str, float] = {}
         for chunk in graph.stream(state, config=config, stream_mode="updates"):
             for node_key, delta in chunk.items():
                 if not isinstance(delta, dict) or not delta:
                     continue
                 result.update(delta)
+                now = time.time()
+                if node_key not in node_start:
+                    node_start[node_key] = now
+                # 节点完成时间 = 当前时间（updates流到即完成）
+                elapsed = now - node_start[node_key] if node_key in node_start else 0.0
                 if node_key in NODE_LABELS:
+                    node_timing[node_key] = {
+                        "label": NODE_LABELS[node_key],
+                        "elapsed_sec": round(elapsed, 1),
+                    }
                     progress_cb("node", (node_key, _delta_degraded(node_key, delta)))
+
+    result["node_timing"] = node_timing
     result["errors"] = degraded_nodes(result)
     return result
 

@@ -184,17 +184,94 @@ def index_analysis(state: dict) -> int:
 
 
 def search(query: str, kind: str | None = None, n: int = 8) -> list[dict]:
-    """语义检索。返回 [{doc, meta, score}]，score=1-余弦距离（越大越相似）。"""
+    """混合检索：向量（语义）+ BM25（关键词）融合，取并集重排。
+
+    返回 [{doc, meta, score}]，score=融合分（0~1，越大越相关）。
+    """
     col = _get_collection()
     total = col.count()
     if not query.strip() or total == 0:
         return []
-    res = col.query(query_embeddings=_embed([query]), n_results=min(n, total),
-                    where={"kind": kind} if kind else None,
-                    include=["documents", "metadatas", "distances"])
-    return [{"doc": d, "meta": m, "score": round(max(0.0, 1.0 - float(dist)), 3)}
-            for d, m, dist in zip(res["documents"][0], res["metadatas"][0],
-                                  res["distances"][0])]
+
+    # 向量检索（语义）
+    vec_res = col.query(query_embeddings=_embed([query]), n_results=min(n * 2, total),
+                        where={"kind": kind} if kind else None,
+                        include=["documents", "metadatas", "distances"])
+    vec_hits = {}
+    for d, m, dist in zip(vec_res["documents"][0], vec_res["metadatas"][0],
+                          vec_res["distances"][0]):
+        key = m.get("ref") or d[:80]
+        vec_hits[key] = {"doc": d, "meta": m,
+                         "vec_score": round(max(0.0, 1.0 - float(dist)), 3)}
+
+    # BM25 关键词检索
+    bm25_hits = _bm25_search(query, kind=kind, n=n * 2)
+
+    # 融合：并集，向量分*0.6 + BM25分*0.4
+    fused = {}
+    for key, hit in vec_hits.items():
+        fused[key] = {**hit, "bm25_score": 0.0, "score": hit["vec_score"] * 0.6}
+    for key, hit in bm25_hits.items():
+        if key in fused:
+            fused[key]["bm25_score"] = hit["score"]
+            fused[key]["score"] = fused[key]["vec_score"] * 0.6 + hit["score"] * 0.4
+        else:
+            fused[key] = {"doc": hit["doc"], "meta": hit["meta"],
+                          "vec_score": 0.0, "bm25_score": hit["score"],
+                          "score": hit["score"] * 0.4}
+
+    ranked = sorted(fused.values(), key=lambda x: x["score"], reverse=True)[:n]
+    for r in ranked:
+        r["score"] = round(r["score"], 3)
+    return ranked
+
+
+def _bm25_search(query: str, kind: str | None = None, n: int = 8) -> dict:
+    """BM25关键词检索。返回 {ref_key: {doc, meta, score}}，score归一化到0~1。"""
+    try:
+        from rank_bm25 import BM25Okapi
+    except ImportError:
+        return {}
+
+    col = _get_collection()
+    # 拉全部文档建索引（规模可控：几百~几千条）
+    batch = col.get(limit=col.count(), include=["documents", "metadatas"])
+    docs = batch["documents"]
+    metas = batch["metadatas"]
+    if not docs:
+        return {}
+
+    # 简单分词：中文按字、英文按词
+    import re as _re
+
+    def _tokenize(text: str) -> list[str]:
+        tokens = _re.findall(r"[\u4e00-\u9fff]|[a-z0-9]+", (text or "").lower())
+        return tokens
+
+    corpus_tokens = [_tokenize(d) for d in docs]
+    bm25 = BM25Okapi(corpus_tokens)
+    query_tokens = _tokenize(query)
+    scores = bm25.get_scores(query_tokens)
+
+    # 过滤kind + 取top
+    results = []
+    for i, score in enumerate(scores):
+        m = metas[i]
+        if kind and m.get("kind") != kind:
+            continue
+        results.append((score, docs[i], m))
+    results.sort(key=lambda x: x[0], reverse=True)
+    results = results[:n]
+
+    if not results:
+        return {}
+    max_s = results[0][0] or 1.0
+    out = {}
+    for score, doc, m in results:
+        key = m.get("ref") or doc[:80]
+        out[key] = {"doc": doc, "meta": m,
+                    "score": round(max(0.0, score / max_s), 3)}
+    return out
 
 
 def stats() -> dict:

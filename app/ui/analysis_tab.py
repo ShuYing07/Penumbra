@@ -137,6 +137,15 @@ class AnalysisTab(QWidget):
         self.btn_export.setEnabled(False)
         bottom.addWidget(self.btn_export)
         bottom.addStretch()
+        self.btn_dcf = QPushButton("DCF估值")
+        self.btn_dcf.setToolTip("对当前标的跑DCF估值，输出内在价值和安全边际")
+        self.btn_dcf.clicked.connect(self._run_dcf)
+        self.btn_dcf.setEnabled(False)
+        bottom.addWidget(self.btn_dcf)
+        self.btn_review = QPushButton("月度复盘")
+        self.btn_review.setToolTip("运行策略自进化复盘，分析历史决策胜率")
+        self.btn_review.clicked.connect(self._run_review)
+        bottom.addWidget(self.btn_review)
 
         v = QVBoxLayout(self)
         v.addLayout(top)
@@ -238,6 +247,7 @@ class AnalysisTab(QWidget):
                           f"{saved}（决策 #{result.get('decision_id')}）")
         self.btn_run.setEnabled(True)
         self.btn_export.setEnabled(True)
+        self.btn_dcf.setEnabled(True)
         self.analysis_finished.emit(result)
 
     @pyqtSlot(str)
@@ -255,3 +265,48 @@ class AnalysisTab(QWidget):
             with open(path, "w", encoding="utf-8") as fp:
                 fp.write(self._last_md)
             self.info.setText(f"已导出：{path}")
+
+    def _run_dcf(self) -> None:
+        """跑DCF估值并在报告区追加结果。"""
+        ticker = self.input.text().strip().upper()
+        if not ticker:
+            QMessageBox.warning(self, "提示", "请先输入标的代码")
+            return
+        try:
+            from core.quant.dcf_model import dcf_from_fundamentals
+            from core.data.service import get_daily
+            bars, _ = get_daily(ticker)
+            if bars is None or len(bars) == 0:
+                QMessageBox.warning(self, "提示", "无行情数据，无法计算DCF")
+                return
+            price = float(bars["close"].iloc[-1])
+            # 用空基本面跑（免费源字段有限，用默认假设）
+            result = dcf_from_fundamentals({}, price)
+            text = (f"\n\n---\n\n## 📊 DCF估值结果\n\n"
+                    f"- 当前价格：{price:.2f} 元\n"
+                    f"- 内在价值：{result.intrinsic_value:.2f} 元/股\n"
+                    f"- 上行空间：{result.upside_pct:+.1f}%\n"
+                    f"- 安全边际：{result.margin_of_safety:+.1f}%\n"
+                    f"- 假设：前5年增长{result.assumptions.get('growth_5y', 0.08)*100:.0f}%，"
+                    f"折现率{result.assumptions.get('discount_rate', 0.10)*100:.0f}%\n"
+                    + ("\n".join(f"- ⚠️ {n}" for n in result.notes)))
+            self.report.append(text)
+            self.info.setText(f"DCF完成：内在价值 {result.intrinsic_value:.2f} 元")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "DCF计算失败", f"{type(e).__name__}: {e}")
+
+    def _run_review(self) -> None:
+        """运行月度策略自进化复盘。"""
+        try:
+            from core.memory.self_evolution import monthly_review
+            report = monthly_review()
+            text = (f"\n\n---\n\n## 🔄 策略自进化复盘（{report.period}）\n\n"
+                    f"- 总决策：{report.total_decisions}，已评估：{report.evaluated}\n"
+                    f"- 方向胜率：{report.win_rate:.1f}%\n"
+                    f"- 最佳市场环境：{report.best_regime}\n"
+                    f"- 最差市场环境：{report.worst_regime}\n\n"
+                    + "\n".join(f"- 💡 {l}" for l in report.lessons))
+            self.report.append(text)
+            self.info.setText(f"复盘完成：胜率{report.win_rate:.1f}%")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "复盘失败", f"{type(e).__name__}: {e}")

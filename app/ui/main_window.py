@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
         help_menu = bar.addMenu("帮助")
         help_menu.addAction("意见反馈", self._open_feedback)
+        help_menu.addAction("API 设置", self._open_api_settings)
         help_menu.addAction("检查更新", self._check_update)
         help_menu.addAction("❤️ 支持开发者", self._open_sponsor)
 
@@ -133,10 +134,16 @@ class MainWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Information)
         box.setText(
             f"当前版本 v{APP_VERSION}\n\n"
-            "📢 更新说明：\n"
-            "本工具不架设自己的更新服务器，所有新版本与更新日志\n"
-            "都会第一时间发布在 GitHub Releases 页面。\n"
-            "建议定期去查看新版本，以获得更稳定的体验与新功能。\n\n"
+            "📢 v0.4.0 更新内容：\n"
+            "🚀 并行DAG架构：4分析师并行+多空并行，速度提升40%+\n"
+            "🔍 混合RAG：向量+BM25关键词融合检索\n"
+            "📰 实时新闻管道：个股新闻/公告/研报自动获取\n"
+            "🤖 本地模型RAG：本地模型自动附带最新新闻分析\n"
+            "⚖️ 多空辩论优化：强制算式+数据时间区间\n"
+            "📊 DCF估值引擎：内在价值/安全边际计算\n"
+            "🧪 因子假设自动生成与统计验证\n"
+            "🔄 策略自进化：月度复盘+胜率统计\n"
+            "📈 回测置换检验：判断策略是否显著优于随机\n\n"
             "⚠️ 本工具仅供研究学习，不构成投资建议。")
         btn_web = box.addButton("查看最新版本", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("知道了", QMessageBox.ButtonRole.RejectRole)
@@ -266,6 +273,11 @@ class MainWindow(QMainWindow):
             dlg.accept()
 
         btn.clicked.connect(submit)
+        dlg.exec()
+
+    def _open_api_settings(self) -> None:
+        from app.ui.api_settings_dialog import APISettingsDialog
+        dlg = APISettingsDialog(self)
         dlg.exec()
 
     def _check_update(self) -> None:

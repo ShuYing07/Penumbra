@@ -330,9 +330,9 @@ def _show_disclaimer_if_first() -> None:
 
 
 def _show_api_key_if_first() -> None:
-    """首次启动（或未配置key）弹出输入框，让用户直接粘贴key，自动写入.env。"""
+    """首次启动引导：可选配置云端API，也可跳过直接用本地模型。"""
     from PyQt6.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton,
-                                 QVBoxLayout)
+                                 QVBoxLayout, QHBoxLayout)
     from config_manager import ensure_configured, save_deepseek_key
 
     ok, _ = ensure_configured()
@@ -340,31 +340,39 @@ def _show_api_key_if_first() -> None:
         return
 
     dlg = QDialog()
-    dlg.setWindowTitle("首次配置 API Key")
-    dlg.setMinimumWidth(520)
+    dlg.setWindowTitle("欢迎使用 疏影·知微")
+    dlg.setMinimumWidth(560)
     lay = QVBoxLayout(dlg)
     lay.addWidget(QLabel(
-        "欢迎使用疏影·知微！\n\n"
-        "程序需要一个 AI 接口 Key 才能生成分析报告（数据行情展示不需要 Key）。\n\n"
-        "1. 去阿里云百炼 https://bailian.console.aliyun.com 申请一个免费 Key（以 sk- 开头）\n"
-        "2. 粘贴到下面输入框，点「保存并开始」\n\n"
-        "Key 只保存在你本机，不会上传。"
+        "欢迎使用！\n\n"
+        "你有两种方式开始：\n\n"
+        "【方式一：云端API】（推荐，质量最高）\n"
+        "粘贴任意OpenAI兼容接口的Key（DeepSeek/通义千问/智谱/硅基流动等），\n"
+        "去对应平台申请免费额度即可。Key只存你本机，不上传。\n\n"
+        "【方式二：本地模型】（完全离线、零成本）\n"
+        "如果你已安装Ollama，可直接跳过此步，用本地模型分析。\n\n"
     ))
     inp = QLineEdit()
-    inp.setPlaceholderText("粘贴你的 API Key（sk-...）")
+    inp.setPlaceholderText("粘贴你的 API Key（sk-...），或留空跳过")
     lay.addWidget(inp)
-    btn = QPushButton("保存并开始")
-    lay.addWidget(btn)
+
+    row = QHBoxLayout()
+    btn_save = QPushButton("保存并开始")
+    btn_save.setStyleSheet("background-color:#2F81F7; color:white; padding:6px 16px;")
+    row.addWidget(btn_save)
+    btn_skip = QPushButton("跳过，先用本地模型")
+    btn_skip.setStyleSheet("padding:6px 16px;")
+    row.addWidget(btn_skip)
+    lay.addLayout(row)
 
     def _save() -> None:
         k = inp.text().strip()
-        if not k:
-            QMessageBox.warning(dlg, "提示", "请粘贴 API Key")
-            return
-        save_deepseek_key(k)
+        if k:
+            save_deepseek_key(k)
         dlg.accept()
 
-    btn.clicked.connect(_save)
+    btn_save.clicked.connect(_save)
+    btn_skip.clicked.connect(dlg.accept)
     inp.returnPressed.connect(_save)
     dlg.exec()
 

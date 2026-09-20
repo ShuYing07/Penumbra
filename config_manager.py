@@ -120,7 +120,7 @@ def update_channel() -> str:
 
 
 # ---------- 版本与更新检查 ----------
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.4.0"
 REPO_API = "https://api.github.com/repos/ShuYing07/Penumbra/releases/latest"
 REPO_URL = "https://github.com/ShuYing07/Penumbra"
 RELEASES_URL = "https://github.com/ShuYing07/Penumbra/releases"

@@ -442,3 +442,56 @@ METRIC_LABELS = [
     ("avg_hold_days", "平均持仓(天)"),
     ("total_fee", "总费用(元)"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# 置换检验（Permutation Test）：策略收益是否显著优于随机持仓
+# ---------------------------------------------------------------------------
+
+def permutation_test(daily_returns, positions, n_perm: int = 200, seed: int = 42) -> dict:
+    """对策略日收益做置换检验，判断其是否显著优于随机持仓。
+
+    参数:
+        daily_returns: 每日买入持有收益率序列（array）
+        positions: 策略每日持仓标记（1=持仓, 0=空仓）
+        n_perm: 置换次数（默认200）
+        seed: 随机种子（可复现）
+
+    返回:
+        {"p_value", "significance", "observed_sharpe", "perm_mean_sharpe", "n_perm", "hold_days"}
+    """
+    rng = np.random.default_rng(seed)
+    daily_returns = np.asarray(daily_returns, dtype=float)
+    positions = np.asarray(positions, dtype=float)
+
+    strat_rets = daily_returns * positions
+    obs_sharpe = (float(strat_rets.mean()) / float(strat_rets.std()) * np.sqrt(TRADING_DAYS)
+                  if len(strat_rets) > 1 and strat_rets.std() > 0 else 0.0)
+
+    pos_count = int(positions.sum())
+    perm_sharpes = []
+    for _ in range(n_perm):
+        shuffled = rng.permutation(positions)
+        pr = daily_returns * shuffled
+        ps = (float(pr.mean()) / float(pr.std()) * np.sqrt(TRADING_DAYS)
+              if len(pr) > 1 and pr.std() > 0 else 0.0)
+        perm_sharpes.append(ps)
+
+    perm_sharpes = np.array(perm_sharpes)
+    p_value = float((perm_sharpes >= obs_sharpe).sum() + 1) / (n_perm + 1)
+
+    if p_value < 0.05:
+        sig = "显著（p<0.05）"
+    elif p_value < 0.10:
+        sig = "较显著（p<0.10）"
+    else:
+        sig = "不显著（p>=0.10）"
+
+    return {
+        "p_value": round(p_value, 4),
+        "significance": sig,
+        "observed_sharpe": round(obs_sharpe, 3),
+        "perm_mean_sharpe": round(float(perm_sharpes.mean()), 3),
+        "n_perm": n_perm,
+        "hold_days": pos_count,
+    }

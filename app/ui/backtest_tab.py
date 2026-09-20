@@ -114,6 +114,10 @@ class BacktestTab(QWidget):
         self.btn_run = QPushButton("开始回测")
         self.btn_run.clicked.connect(self.run_backtest)
         bar.addWidget(self.btn_run, 1, 4, 1, 2)
+        self.btn_factor = QPushButton("因子筛选")
+        self.btn_factor.setToolTip("自动生成候选因子假设并统计验证（t检验）")
+        self.btn_factor.clicked.connect(self._run_factor_screen)
+        bar.addWidget(self.btn_factor, 1, 6)
         self.lbl_status = QLabel("信号 t 日收盘生成 → t+1 开盘成交（无前视），含佣金/印花税/滑点")
         bar.addWidget(self.lbl_status, 1, 6, 1, 3)
 
@@ -284,3 +288,31 @@ class BacktestTab(QWidget):
                 if c == 2:
                     item.setForeground(QColor("#c0392b" if val == "买入" else "#1e8449"))
                 self.trade_table.setItem(r, c, item)
+
+    def _run_factor_screen(self) -> None:
+        """自动因子筛选：生成假设→统计验证→弹窗展示结果。"""
+        from PyQt6.QtWidgets import QMessageBox
+        ticker = self.ed_ticker.text().strip().upper()
+        if not ticker:
+            QMessageBox.warning(self, "提示", "请先输入标的代码")
+            return
+        try:
+            from core.quant.factor_hypothesis import run_factor_screening
+            df, _ = get_daily(ticker)
+            if df is None or len(df) < 60:
+                QMessageBox.warning(self, "提示", "数据不足（需≥60根日线）")
+                return
+            results = run_factor_screening(df)
+            lines = [f"📊 因子筛选结果（{ticker}）\n"]
+            for r in results:
+                sig = "✅显著" if r.get("significant") else "❌不显著"
+                lines.append(
+                    f"【{r['description']}】{sig}\n"
+                    f"  信号次数: {r.get('signals')}, "
+                    f"平均收益: {r.get('mean_return_pct')}%, "
+                    f"胜率: {r.get('win_rate_pct')}%, "
+                    f"t值: {r.get('t_stat')}\n"
+                    f"  逻辑: {r.get('logic')}\n")
+            QMessageBox.information(self, "因子筛选完成", "\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "因子筛选失败", f"{type(e).__name__}: {e}")
