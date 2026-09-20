@@ -161,11 +161,15 @@ class WatchlistTab(QWidget):
 
     # ---------------- 操作 ----------------
     def _add(self) -> None:
-        ticker = self.in_ticker.text().strip().upper()
+        from core.data.service import normalize_ticker
+        raw = self.in_ticker.text().strip().upper()
+        ticker = normalize_ticker(raw)
+        if ticker != raw:
+            self.in_ticker.setText(ticker)
         cond = self.in_cond.text().strip()
         note = self.in_note.text().strip()
         if not ticker:
-            self._warn("请输入标的代码，如 SH600519")
+            self._warn("请输入标的代码，如 600519")
             return
         market = service.market_of(ticker)
         if market == "UNKNOWN":

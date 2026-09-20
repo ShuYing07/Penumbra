@@ -21,8 +21,24 @@ from core.config import now_cn
 log = logging.getLogger("stockai.data")
 
 
+def normalize_ticker(raw: str) -> str:
+    """用户输入标准化：
+    - '600519' → 'SH600519'（6/5/9开头→沪市）
+    - '000001' → 'SZ000001'（0/3/1/2/4/7/8开头→深市）
+    - 已带 SH/SZ/BJ 前缀或含 . / - 的原样返回
+    """
+    t = raw.strip().upper()
+    if not t:
+        return t
+    if re.match(r"^(SH|SZ|BJ)\d", t) or "." in t or "-" in t:
+        return t
+    if re.fullmatch(r"\d{6}", t):
+        return ("SH" if t[0] in "659" else "SZ") + t
+    return t
+
+
 def market_of(ticker: str) -> str:
-    t = ticker.upper()
+    t = normalize_ticker(ticker)
     if re.fullmatch(r"(SH|SZ)\d{6}", t):
         return "CN"
     if re.fullmatch(r"[A-Z0-9]{2,15}-(USD|USDT|USDC)", t):
@@ -54,7 +70,7 @@ def security_type(ticker: str) -> str:
 
 def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
     """返回 (日线DataFrame, 数据状态说明)。优先读缓存，缺失/陈旧则联网增量补取。"""
-    ticker = ticker.upper()
+    ticker = normalize_ticker(ticker)
     market = market_of(ticker)
     cached = cache.load_bars(ticker)
     today = now_cn().strftime("%Y-%m-%d")

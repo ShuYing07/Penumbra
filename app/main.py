@@ -15,6 +15,32 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def _fix_akshare_data() -> None:
+    """确保PyInstaller打包后akshare的calendar.json在正确位置。"""
+    try:
+        import akshare
+        ak_dir = Path(akshare.__file__).parent
+        fold = ak_dir / "file_fold"
+        cal = fold / "calendar.json"
+        if cal.exists():
+            return
+        fold.mkdir(parents=True, exist_ok=True)
+        candidates = []
+        if hasattr(sys, '_MEIPASS'):
+            candidates.append(Path(sys._MEIPASS) / "akshare" / "file_fold" / "calendar.json")
+        exe_dir = Path(sys.executable).parent
+        candidates.append(exe_dir / "_internal" / "akshare" / "file_fold" / "calendar.json")
+        for src in candidates:
+            if src and src.exists():
+                import shutil
+                shutil.copy2(src, cal)
+                break
+    except Exception:
+        pass
+
+_fix_akshare_data()
+
+
 def _selftest() -> int:
     """打包冒烟：不依赖控制台（windowed 下 print 安全 no-op），结果落 data/selftest.log。"""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -330,13 +356,21 @@ def _show_disclaimer_if_first() -> None:
 
 
 def _show_api_key_if_first() -> None:
-    """首次启动引导：可选配置云端API，也可跳过直接用本地模型。"""
+    """首次启动引导：可选配置云端API，也可跳过直接用本地模型。
+    一旦用户做过选择（保存Key或跳过），后续不再弹窗。"""
+    from PyQt6.QtCore import QSettings
     from PyQt6.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton,
                                  QVBoxLayout, QHBoxLayout)
     from config_manager import ensure_configured, save_deepseek_key
 
+    settings = QSettings("StockAI", "StockAIPredictor")
+    # 用户已做过选择（保存过Key或主动跳过），不再弹窗
+    if settings.value("api_choice_done", False, type=bool):
+        return
     ok, _ = ensure_configured()
     if ok:
+        # .env里已有Key，说明用户之前配过，标记为已完成
+        settings.setValue("api_choice_done", True)
         return
 
     dlg = QDialog()
@@ -351,6 +385,7 @@ def _show_api_key_if_first() -> None:
         "去对应平台申请免费额度即可。Key只存你本机，不上传。\n\n"
         "【方式二：本地模型】（完全离线、零成本）\n"
         "如果你已安装Ollama，可直接跳过此步，用本地模型分析。\n\n"
+        "（之后可在 帮助→API设置 中随时修改）"
     ))
     inp = QLineEdit()
     inp.setPlaceholderText("粘贴你的 API Key（sk-...），或留空跳过")
@@ -369,10 +404,15 @@ def _show_api_key_if_first() -> None:
         k = inp.text().strip()
         if k:
             save_deepseek_key(k)
+        settings.setValue("api_choice_done", True)
+        dlg.accept()
+
+    def _skip() -> None:
+        settings.setValue("api_choice_done", True)
         dlg.accept()
 
     btn_save.clicked.connect(_save)
-    btn_skip.clicked.connect(dlg.accept)
+    btn_skip.clicked.connect(_skip)
     inp.returnPressed.connect(_save)
     dlg.exec()
 

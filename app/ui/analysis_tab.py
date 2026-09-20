@@ -81,6 +81,7 @@ class AnalysisWorker(QThread):
 
 class AnalysisTab(QWidget):
     analysis_finished = pyqtSignal(dict)  # 广播给主窗口联动（刷新历史/K线）
+    ticker_submitted = pyqtSignal(str)   # 用户输入代码后立即触发（K线不等AI分析）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,10 +162,17 @@ class AnalysisTab(QWidget):
     def _start(self) -> None:
         if self.worker and self.worker.isRunning():
             return
-        ticker = self.input.text().strip().upper()
-        if not ticker:
-            self.info.setText("请输入标的代码，如 SH600519")
+        raw = self.input.text().strip().upper()
+        if not raw:
+            self.info.setText("请输入标的代码，如 600519 或 SH600519")
             return
+        # 自动补全A股前缀：600519→SH600519，000001→SZ000001
+        from core.data.service import normalize_ticker
+        ticker = normalize_ticker(raw)
+        if ticker != raw:
+            self.input.setText(ticker)
+        # 立即触发K线加载（不等AI分析，数据层独立工作）
+        self.ticker_submitted.emit(ticker)
         mock = self.mock_box.isChecked()
         backend = _BACKENDS[self.engine_box.currentIndex()][1]
         # 本地/自动引擎前置检查（缺 Ollama 或模型时先引导，不白跑管线）

@@ -109,6 +109,8 @@ class MainWindow(QMainWindow):
 
         # 联动：分析完成 → 刷新决策记录 / K线图自动载入 / 模拟盘刷新
         self.analysis_tab.analysis_finished.connect(self._on_analysis_done)
+        # 用户输入代码后立即加载K线（不等AI分析，数据层独立）
+        self.analysis_tab.ticker_submitted.connect(self.chart_tab.load)
         # 自选股 → 加入分析（双击/右键）
         self.watchlist_tab.analyze_requested.connect(self._on_watchlist_analyze)
         # 自选股触发 → 托盘气泡通知
@@ -134,16 +136,13 @@ class MainWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Information)
         box.setText(
             f"当前版本 v{APP_VERSION}\n\n"
-            "📢 v0.4.0 更新内容：\n"
-            "🚀 并行DAG架构：4分析师并行+多空并行，速度提升40%+\n"
-            "🔍 混合RAG：向量+BM25关键词融合检索\n"
-            "📰 实时新闻管道：个股新闻/公告/研报自动获取\n"
-            "🤖 本地模型RAG：本地模型自动附带最新新闻分析\n"
-            "⚖️ 多空辩论优化：强制算式+数据时间区间\n"
-            "📊 DCF估值引擎：内在价值/安全边际计算\n"
-            "🧪 因子假设自动生成与统计验证\n"
-            "🔄 策略自进化：月度复盘+胜率统计\n"
-            "📈 回测置换检验：判断策略是否显著优于随机\n\n"
+            "📢 v0.5.0 更新内容：\n"
+            "📊 新增：统计严谨性层（置换检验+样本量门控+多重校正）\n"
+            "📈 新增：威科夫量价结构识别（Spring/Upthrust/SOS）\n"
+            "🛡️ 新增：风控审查Agent（独立审查多空辩论结论）\n"
+            "✅ 修复：新闻管道表初始化+公告/研报接口列名\n"
+            "📰 个股新闻实时获取+情感标注\n"
+            "🤖 本地模型RAG：分析时自动附带最新新闻\n\n"
             "⚠️ 本工具仅供研究学习，不构成投资建议。")
         btn_web = box.addButton("查看最新版本", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("知道了", QMessageBox.ButtonRole.RejectRole)

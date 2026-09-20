@@ -47,6 +47,7 @@ def _ensure_table():
 
 def _get_cached(stock_code: str, category: str, ttl: int) -> list[dict] | None:
     """读缓存，过期返回None。"""
+    _ensure_table()
     cutoff = (datetime.now() - timedelta(seconds=ttl)).isoformat(timespec="seconds")
     with get_conn() as conn:
         rows = conn.execute(
@@ -151,8 +152,11 @@ def fetch_announcements(stock_code: str, ann_type: str | None = None, limit: int
     items = []
     try:
         with domestic_network():
-            df = ak.stock_notice_report(symbol=code)
+            df = ak.stock_notice_report(symbol="全部")
         if df is not None and len(df) > 0:
+            # 按股票代码过滤
+            code_short = code
+            df = df[df["代码"].astype(str).str.contains(code_short)]
             for _, r in df.head(limit).iterrows():
                 title = str(r.get("公告标题", "")).strip()
                 if ann_type and ann_type not in title:
@@ -160,10 +164,10 @@ def fetch_announcements(stock_code: str, ann_type: str | None = None, limit: int
                 items.append({
                     "stock_code": code,
                     "title": title,
-                    "summary": str(r.get("公告内容", ""))[:200],
-                    "source": str(r.get("公告来源", "沪深交易所")),
-                    "url": str(r.get("公告链接", "")),
-                    "publish_time": str(r.get("公告时间", "")),
+                    "summary": "",
+                    "source": str(r.get("公告类型", "沪深交易所")),
+                    "url": str(r.get("网址", "")),
+                    "publish_time": str(r.get("公告日期", "")),
                     "sentiment": _simple_sentiment(title),
                 })
     except Exception as e:  # noqa: BLE001
@@ -189,12 +193,12 @@ def fetch_research_reports(stock_code: str, limit: int = 10) -> list[dict]:
             for _, r in df.head(limit).iterrows():
                 items.append({
                     "stock_code": code,
-                    "title": str(r.get("报告标题", "")).strip(),
-                    "summary": f"评级：{r.get('评级', '')} | 目标价：{r.get('目标价', '')} | 分析师：{r.get('分析师', '')}",
+                    "title": str(r.get("报告名称", "")).strip(),
+                    "summary": f"评级：{r.get('东财评级', '')} | 机构：{r.get('机构', '')}",
                     "source": str(r.get("机构", "")),
-                    "url": "",
+                    "url": str(r.get("报告PDF链接", "")),
                     "publish_time": str(r.get("日期", "")),
-                    "sentiment": _simple_sentiment(str(r.get("报告标题", ""))),
+                    "sentiment": _simple_sentiment(str(r.get("报告名称", ""))),
                 })
     except Exception as e:  # noqa: BLE001
         log.warning("fetch_research_reports(%s)失败: %s", code, e)

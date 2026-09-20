@@ -74,10 +74,14 @@ class DebateTab(QWidget):
         lay.addWidget(QLabel("⚠️ 该分析仅为逻辑推演与数据罗列，不构成投资建议。"))
 
     def _go(self):
-        ticker = self.input.text().strip().upper()
-        if not ticker:
+        from core.data.service import normalize_ticker
+        raw = self.input.text().strip().upper()
+        if not raw:
             self.status.setText("请输入股票代码")
             return
+        ticker = normalize_ticker(raw)
+        if ticker != raw:
+            self.input.setText(ticker)
         self.btn.setEnabled(False)
         self.status.setText("AI 正在并行展开多空分析，通常需 30~90 秒…")
         self._w = _DebateWorker(ticker)
