@@ -1,0 +1,57 @@
+### StockAIPredictor · QLoRA 4bit 教学资源蒸馏训练配置（Qwen2.5-3B，8GB 显存/16GB RAM 适配版）
+### 用法（venv_train）：llamafactory-cli train training_configs/qwen2_5_qlora_curriculum.yaml --dataset_dir D:/StockAIPredictor/data/distill/export
+### 首次下载 Qwen2.5-3B-Instruct fp16 ~6GB，设 HF_ENDPOINT=https://hf-mirror.com 走国内镜像
+### 3B 基座：6GB 下载（vs 7B 15GB），4bit 仅占 ~2GB 显存，16GB RAM 安全加载
+### 训练前先 ollama stop qwen2.5:7b-instruct-q4_K_M 释放显存
+
+### model
+model_name_or_path: D:/StockAIPredictor/models/Qwen2.5-3B-Instruct
+adapter_name_or_path:
+quantization_bit: 4
+quantization_method: bitsandbytes
+quantization_type: nf4
+double_quantization: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.05
+lora_target: all
+
+### dataset
+dataset: stockai_curriculum
+dataset_dir: D:/StockAIPredictor/data/distill/export
+template: qwen
+cutoff_len: 512
+max_samples:
+overwrite_cache: true
+
+### output
+output_dir: D:/StockAIPredictor/data/training/output
+logging_steps: 5
+save_steps: 200
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+gradient_checkpointing: true
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+max_grad_norm: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+weight_decay: 0.0
+optim: paged_adamw_8bit
+
+### precision
+bf16: true
+
+### eval
+val_size: 0.05
+eval_strategy: steps
+eval_steps: 200

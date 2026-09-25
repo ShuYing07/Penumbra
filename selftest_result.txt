@@ -1,0 +1,11 @@
+﻿1. MainWindow OK
+2. 600519: 6012行, 收盘=1237.00, 源=cache
+3. AAPL: 511行, 收盘=337.02, 源=network(+0)
+4. 指标: RSI=61.2
+7. 券商: 10家
+8. safe_open_url OK
+9. decision_log init OK
+
+=== 错误 ===
+  - 搜索: No module named 'core.search.engine'
+  - 合规: cannot import name 'filter_text' from 'core.compliance' (D:\StockAIPredictor\core\compliance.py)

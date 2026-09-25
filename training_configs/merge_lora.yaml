@@ -1,0 +1,15 @@
+### StockAIPredictor · LoRA 合并到 fp16 基座（训练后执行，CPU 侧合并省显存）
+### 用法：llamafactory-cli export training_configs/merge_lora.yaml
+### 3B 基座合并仅需 ~6GB RAM，16GB 系统内存安全
+
+### model
+model_name_or_path: D:/StockAIPredictor/models/Qwen2.5-3B-Instruct
+adapter_name_or_path: D:/StockAIPredictor/data/training/output
+template: qwen
+finetuning_type: lora
+
+### export
+export_dir: D:/StockAIPredictor/data/training/merged
+export_size: 2
+export_device: cpu
+export_legacy_format: false

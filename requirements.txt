@@ -1,0 +1,17 @@
+pandas
+numpy
+akshare
+yfinance
+requests
+beautifulsoup4
+openai
+langchain
+langgraph
+chromadb
+pydantic
+pyqt6
+pyqtgraph
+matplotlib
+
+# 可选：本地 GGUF 推理后端（Windows 需编译工具，见 LOCAL_AI_GUIDE.md）
+# llama-cpp-python

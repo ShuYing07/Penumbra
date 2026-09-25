@@ -1,0 +1,18 @@
+{
+  "stockai_curriculum": {
+    "file_name": "curriculum_sft.json",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  },
+  "stockai_sft": {
+    "file_name": "sft_llamafactory.json",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  }
+}
