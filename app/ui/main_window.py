@@ -232,10 +232,16 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _load_demo(self) -> None:
-        """首次启动自动加载贵州茅台作为示例。"""
+        """首次启动自动加载AAPL示例数据（只加载K线，不跑LLM，避免启动慢）。"""
+        from PyQt6.QtCore import QSettings
+        settings = QSettings("Shuying", "ShuyingInsight")
+        first = not settings.value("demo_loaded", False, type=bool)
+        if not first:
+            return
+        settings.setValue("demo_loaded", True)
         try:
             self.chat_tab.input.setText("AAPL")
-            self.chat_tab._analyze()
+            self.chart_tab.load("AAPL")
         except Exception:
             pass
 
@@ -324,39 +330,25 @@ class MainWindow(QMainWindow):
 
     # ---------- 三栏：右侧信息面板 ----------
     def _load_market_overview(self) -> None:
-        """用yfinance异步加载市场概览数据。"""
+        """用新浪实时行情异步加载市场概览数据。"""
         self.r_market.setText("📊 今日市场概览\n\n加载中...")
         class _MktWorker(QThread):
             done = pyqtSignal(str)
             fail = pyqtSignal(str)
 
             def run(self):
-                lines = ["📊 今日市场概览", ""]
-                # 先用yfinance获取
                 try:
-                    import yfinance as yf
-                    indices = [
-                        ("上证指数", "000001.SS"),
-                        ("深证成指", "399001.SZ"),
-                        ("创业板指", "399006.SZ"),
-                        ("沪深300", "000300.SS"),
-                    ]
-                    for name, sym in indices:
-                        try:
-                            t = yf.Ticker(sym)
-                            h = t.history(period="5d")
-                            if len(h) >= 2:
-                                last = h["Close"].iloc[-1]
-                                prev = h["Close"].iloc[-2]
-                                chg = (last - prev) / prev * 100
-                                lines.append(f"{name}: {last:.2f} ({chg:+.2f}%)")
-                            else:
-                                lines.append(f"{name}: —")
-                        except Exception:
-                            lines.append(f"{name}: —")
-                except Exception:
-                    lines.append("（数据加载失败）")
-                self.done.emit("\n".join(lines))
+                    from core.data.market_overview import list_market_indices
+                    items = list_market_indices()
+                    if not items:
+                        self.fail.emit("empty")
+                        return
+                    lines = ["📊 今日市场概览", ""]
+                    for it in items:
+                        lines.append(f"{it['name']}: {it['price']:.2f} ({it['chg_pct']:+.2f}%)")
+                    self.done.emit("\n".join(lines))
+                except Exception as e:  # noqa: BLE001
+                    self.fail.emit(str(e))
 
         self._mkt_w = _MktWorker()
         from core.config import now_cn

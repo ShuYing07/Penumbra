@@ -65,7 +65,7 @@ def t_compliance():
     assert "【已过滤】" in out1 and "买入" not in out1, out1
     out2 = sanitize_ai_output("该股票目标价100元")
     assert "目标价" not in out2, out2
-    assert "不构成投资建议" in out2, "未追加免责声明"
+    assert "不构成任何投资建议" in out2, "未追加免责声明"
 
 
 # ---------- 4. 多空辩论模块可导入/结构 ----------
