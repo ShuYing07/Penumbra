@@ -46,7 +46,7 @@
 
 **不想装Python？直接下载解压即用：**
 
-👉 **[疏影知微_v0.7.0.zip](https://github.com/ShuYing07/Penumbra/releases/latest)** （约360MB）
+👉 **[ShuyingInsight_v0.7.0.zip](https://github.com/ShuYing07/Penumbra/releases/latest)** （约360MB）
 
 解压后双击 `疏影知微.exe` 即可运行，无需安装Python、无需配置环境。
 
