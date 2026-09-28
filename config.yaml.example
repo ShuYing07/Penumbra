@@ -23,3 +23,27 @@ cache:
 data:
   preferred_source: akshare     # akshare / tushare
   timeout_seconds: 20
+  adapters:
+    active: akshare     # akshare | yfinance | bloomberg | lseg | wind
+    bloomberg:
+      host_env: BL_API_HOST
+      token_env: BL_API_TOKEN
+    lseg:
+      api_key_env: LSEG_API_KEY
+
+
+# 混合推理策略
+reasoning:
+  strategy: auto        # auto（按任务类型）| structured | retrieval
+  confidence_threshold: 0.15
+
+# HERMES 分层检索多 Agent 架构（可选）
+hermes:
+  enabled: true         # false 时主分析流程不启用 HERMES 报告层
+  consensus_threshold: 0.55   # 语义一致性阈值，低于则触发重检索
+  max_rounds: 2         # 自适应共识最大重检索轮次
+
+# 合规规则引擎（模块六：企业自定义，无需改代码）
+compliance:
+  rules_file: data/compliance_rules.json   # 缺省用内置默认规则
+  monitor_enabled: true                    # 持续合规监控

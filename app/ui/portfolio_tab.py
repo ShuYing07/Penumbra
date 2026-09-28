@@ -31,13 +31,15 @@ class _PortfolioWorker(QThread):
         super().__init__()
         self.tickers, self.weights = tickers, weights
         self.strategy, self.params, self.rebalance = strategy, params, rebalance
-        self.start, self.end = start, end
+        # 不能叫 self.start，会遮蔽 QThread.start 方法
+        self.start_date, self.end_date = start, end
 
     def run(self) -> None:
         try:
             specs = [HoldingSpec(t, w) for t, w in zip(self.tickers, self.weights)]
             res = run_portfolio(specs, strategy=self.strategy, params=self.params,
-                                rebalance=self.rebalance, start=self.start, end=self.end)
+                                rebalance=self.rebalance, start=self.start_date,
+                                end=self.end_date)
             self.done.emit(res)
         except Exception as e:  # noqa: BLE001
             self.bad.emit(f"{type(e).__name__}: {e}")

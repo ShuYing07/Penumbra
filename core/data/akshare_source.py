@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pandas as pd
 import requests
@@ -16,6 +17,11 @@ import requests
 from core.config import domestic_network
 
 log = logging.getLogger("stockai.data.akshare")
+
+# akshare 新浪源内部用 py_mini_racer(V8) 解析 JS；V8 初始化非线程安全，
+# 多线程并发首次调用会偶发崩溃（0xC0000409，仅冻结环境出现）。
+# 统一串行化新浪相关 akshare 调用（日线/指数日线），根治该崩溃。
+_SINA_LOCK = threading.Lock()
 
 _COLS = ["open", "high", "low", "close", "volume", "amount"]
 
@@ -42,8 +48,9 @@ def _norm(df: pd.DataFrame) -> pd.DataFrame:
 
 def _daily_sina(ak, sym: str) -> pd.DataFrame:
     """新浪前复权日线（股票；ETF 不支持，会抛 JSONDecodeError）。"""
-    with domestic_network():
-        raw = ak.stock_zh_a_daily(symbol=sym, adjust="qfq")
+    with _SINA_LOCK:  # mini_racer(V8) 非线程安全，必须串行
+        with domestic_network():
+            raw = ak.stock_zh_a_daily(symbol=sym, adjust="qfq")
     return _norm(raw.rename(columns=str.lower))
 
 
@@ -181,3 +188,101 @@ def fetch_info_cn(ticker: str) -> dict:
     except Exception as e:  # noqa: BLE001
         log.warning("F10 资料失败 %s: %s", ticker, e)
         return {}
+
+
+# ---------------------------------------------------------------------------
+# A股指数日线（模块一：修复沪深300等指数历史数据缺失）
+# 优先级：东财 index_zh_a_hist（支持日期区间）→ 新浪 stock_zh_index_daily（全历史）
+#         → Tushare index_daily → yfinance（service 层兜底）
+# ---------------------------------------------------------------------------
+def fetch_daily_index(ticker: str,
+                      start_date: str = "19900101",
+                      end_date: str | None = None) -> pd.DataFrame:
+    """A股指数前复权日线。ticker 为 6 位指数代码（如 '000300'，已在 service.INDEX_MAP 注册）。
+
+    - 东财 index_zh_a_hist：实测可返回 6000+ 行（沪深300 自 2002 年起），支持区间切片；
+    - 新浪 stock_zh_index_daily：全历史兜底，仅 date/open/high/low/close/volume；
+    - Tushare index_daily：积分号可用时兜底。
+    """
+    import akshare as ak
+
+    from core.config import now_cn
+    from core.data.service import INDEX_MAP
+
+    if ticker not in INDEX_MAP:
+        raise ValueError(f"未注册的指数代码: {ticker}")
+    entry = INDEX_MAP[ticker]
+    end_date = end_date or now_cn().strftime("%Y%m%d")
+    last_err: Exception | None = None
+
+    # 1) 东财（支持 start/end 区间；本机 TUN 下 443 可能被断，失败自动降级）
+    try:
+        with domestic_network():
+            raw = ak.index_zh_a_hist(symbol=entry["akshare"], period="daily",
+                                     start_date=start_date, end_date=end_date)
+        df = _norm(raw.rename(columns={
+            "日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
+            "最低": "low", "成交量": "volume", "成交额": "amount",
+        }))
+        log.info("指数日线 %s 来源=eastmoney 行数=%d", ticker, len(df))
+        return df
+    except Exception as e:  # noqa: BLE001
+        last_err = e
+        log.warning("指数日线 eastmoney 失败 %s: %s", ticker, e)
+
+    # 2) 新浪（全历史；列名为英文小写）
+    try:
+        with _SINA_LOCK:  # mini_racer(V8) 非线程安全，必须串行
+            with domestic_network():
+                raw = ak.stock_zh_index_daily(symbol=entry["sina"])
+        df = _norm(raw.rename(columns=str.lower))
+        log.info("指数日线 %s 来源=sina 行数=%d", ticker, len(df))
+        return df
+    except Exception as e:  # noqa: BLE001
+        last_err = e
+        log.warning("指数日线 sina 失败 %s: %s", ticker, e)
+
+    # 3) Tushare（需 TUSHARE_TOKEN；新号积分不足时静默失败）
+    try:
+        from core.data import tushare_source
+        df = tushare_source.fetch_index_daily(entry["tushare"].split(".")[0])
+        log.info("指数日线 %s 来源=tushare 行数=%d", ticker, len(df))
+        return df
+    except Exception as e:  # noqa: BLE001
+        log.warning("指数日线 tushare 失败 %s: %s", ticker, e)
+
+    raise last_err if last_err else RuntimeError(f"全部指数日线源失败: {ticker}")
+
+
+def fetch_realtime_index(ticker: str) -> dict:
+    """新浪指数实时报价（sh000300 / sz399001 等）。字段与股票实时一致。"""
+    from core.data.service import INDEX_MAP
+
+    if ticker not in INDEX_MAP:
+        raise ValueError(f"未注册的指数代码: {ticker}")
+    sym = INDEX_MAP[ticker]["sina"]
+    with domestic_network():
+        resp = requests.get(
+            f"https://hq.sinajs.cn/list={sym}",
+            headers={"Referer": "https://finance.sina.com.cn"},
+            timeout=10,
+        )
+    resp.encoding = "gbk"
+    payload = resp.text.split('"')[1].split(",")
+    if len(payload) < 32 or not payload[3]:
+        raise RuntimeError(f"新浪指数实时为空: {ticker}")
+    prev = float(payload[2])
+    price = float(payload[3])
+    return {
+        "name": payload[0],
+        "open": float(payload[1]),
+        "prev_close": prev,
+        "price": price,
+        "high": float(payload[4]),
+        "low": float(payload[5]),
+        "volume": float(payload[8]),
+        "amount": float(payload[9]),
+        "date": payload[30],
+        "time": payload[31],
+        "chg_pct": round((price / prev - 1) * 100, 2) if prev else None,
+    }

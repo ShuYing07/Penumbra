@@ -39,9 +39,29 @@ class OverviewTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
+        # 模块五：板块热力图（Treemap，面积≈成交额，颜色=涨跌幅，红涨绿跌）
+        from app.ui.sector_treemap import SectorTreemap
+        heat_title = QLabel("板块热力图 · 面积≈成交额 · 颜色=涨跌幅")
+        heat_title.setStyleSheet("color:#8B949E; font-size:12px; margin-top:8px;")
+        self.heatmap = SectorTreemap()
+        self.heatmap.setMinimumHeight(200)
+        self.heat_hint = QLabel("（悬停查看板块涨跌幅）")
+        self.heat_hint.setStyleSheet("color:#8B949E; font-size:11px;")
+        self.heatmap.hovered.connect(self.heat_hint.setText)
+        btn_heat = QPushButton("刷新板块")
+        btn_heat.clicked.connect(self.heatmap.refresh)
+
+        hrow = QHBoxLayout()
+        hrow.addWidget(heat_title)
+        hrow.addStretch(1)
+        hrow.addWidget(btn_heat)
+
         v = QVBoxLayout(self)
         v.addLayout(top)
         v.addWidget(self.table)
+        v.addLayout(hrow)
+        v.addWidget(self.heatmap, 1)
+        v.addWidget(self.heat_hint)
         self.refresh()
 
     def refresh(self) -> None:

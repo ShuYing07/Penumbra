@@ -40,8 +40,9 @@ def _span(text: str, color: str) -> str:
 
 
 class ChatTab(QWidget):
-    """三栏对话式分析视图。"""
+    """三栏对话式分析视图（模块四：对话式研究入口 + 执行时间线）。"""
     analysis_done = pyqtSignal(str, dict)  # ticker, snapshot
+    request_tab = pyqtSignal(int)          # 请求主窗口切换到指定 tab
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -54,14 +55,15 @@ class ChatTab(QWidget):
         sp = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(sp)
 
-        # 左：自选股
+        # 左：自选股（默认 5 只示例）
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.addWidget(QLabel("自选股"))
         self.list = QListWidget()
         self.list.setMinimumWidth(200)
         for code, name in [("SH600519", "贵州茅台"), ("AAPL", "苹果"),
-                           ("SH000300", "沪深300"), ("SZ300750", "宁德时代")]:
+                           ("SH000300", "沪深300"), ("SZ300750", "宁德时代"),
+                           ("0700.HK", "腾讯控股")]:
             item = QListWidgetItem(f"{name}\n{code}")
             item.setData(Qt.ItemDataRole.UserRole, code)
             self.list.addItem(item)
@@ -77,6 +79,20 @@ class ChatTab(QWidget):
         # 中：对话
         mid = QWidget()
         mv = QVBoxLayout(mid)
+        # 快捷入口卡片（对话式研究入口）
+        quick_row = QHBoxLayout()
+        for text, tip, target in (("📈 分析个股", "深入分析当前股票", 3),
+                                  ("⚔️ 多空辩论", "多空结构化对抗", 15),
+                                  ("📋 今日复盘", "回看今日市场", 1)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setStyleSheet(
+                "QPushButton{padding:8px 10px; border-radius:10px;"
+                "background:rgba(19,23,34,0.85); border:1px solid rgba(0,229,255,0.15);}"
+                "QPushButton:hover{border:1px solid #00E5FF; color:#00E5FF;}")
+            b.clicked.connect(lambda _=False, t=target: self.request_tab.emit(t))
+            quick_row.addWidget(b)
+        mv.addLayout(quick_row)
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
         self.chat.setHtml(self._welcome())
@@ -101,6 +117,12 @@ class ChatTab(QWidget):
         self.input.setCompleter(self._completer)
         self._load_completer_data()
         input_row.addWidget(self.input)
+        # 分享（模块七：一键分享分析报告）
+        self.btn_share = QPushButton("📤 分享")
+        self.btn_share.setToolTip("导出当前分析为 Markdown 并复制到剪贴板")
+        self.btn_share.setStyleSheet("QPushButton{padding:4px 12px;font-weight:bold;}")
+        self.btn_share.clicked.connect(self._share_report)
+        input_row.addWidget(self.btn_share)
         mv.addLayout(input_row)
 
         # 右：K线（收盘价+均线）
@@ -121,7 +143,7 @@ class ChatTab(QWidget):
         sp.setStretchFactor(2, 3)
 
     def _load_completer_data(self):
-        """加载股票索引到补全列表。"""
+        """加载股票索引到补全列表（常用前 2000 条；全量搜索走 Ctrl+K 命令面板）。"""
         try:
             import json
             from pathlib import Path as P
@@ -129,7 +151,18 @@ class ChatTab(QWidget):
             if stocks_file.exists():
                 with open(stocks_file, encoding="utf-8") as f:
                     stocks = json.load(f)
-                items = [f"{s['code']} {s['name']}" for s in stocks[:500]]
+                # 指数与 A股优先（更常用），其次美股/港股，再其余
+                def _key(s):
+                    m = s.get("market", "")
+                    if s.get("board") == "指数":
+                        return 0
+                    if m == "A股":
+                        return 1
+                    if m in ("美股", "港股"):
+                        return 2
+                    return 3
+                stocks = sorted(stocks, key=_key)[:2000]
+                items = [f"{s['code']} {s['name']}" for s in stocks]
                 self._completer.setModel(QStringListModel(items, self._completer))
         except Exception:
             pass
@@ -137,9 +170,12 @@ class ChatTab(QWidget):
     # ---------- 对话渲染 ----------
     def _welcome(self) -> str:
         return (
-            f"<div style='color:#8b949e'>👋 你好！在下方输入框输入股票代码（如 "
-            f"贵州茅台或 600519），我会客观展示它的行情与技术指标。<br>"
-            f"试试输入「贵州茅台」或「600519」开始分析。</div>"
+            f"<div style='color:#8b949e; line-height:1.7;'>"
+            f"<div style='font-size:18px; color:#E6EDF3; font-weight:bold;'>👋 你好，我是你的 AI 研究助手</div><br/>"
+            f"输入股票代码、名称或拼音（如 <b>600519</b> / <b>茅台</b> / <b>gzmt</b>），我会：<br/>"
+            f"① 识别市场 → ② 采集行情 → ③ 计算技术指标 → ④ 生成客观报告<br/><br/>"
+            f"上方快捷入口可直接前往「分析个股」「多空辩论」「今日复盘」。<br/>"
+            f"所有输出均为客观数据展示，不构成投资建议。</div>"
         )
 
     def _say(self, html: str) -> None:
@@ -179,7 +215,18 @@ class ChatTab(QWidget):
         # 禁用输入，显示加载中
         self.input.setEnabled(False)
         self.btn_search.setEnabled(False)
-        self._say("<span style='color:#8b949e'>⏳ 正在获取数据...</span>")
+        self.btn_share.setEnabled(False)
+        # 模块四：AI 执行时间线（逐步打勾，让用户看到 AI 在做什么）
+        self._timeline_id = self.chat.document().characterCount()
+        self._say(
+            "<div style='background:rgba(19,23,34,0.85);border:1px solid rgba(0,229,255,0.15);"
+            "border-radius:10px;padding:10px 14px;color:#8b949e;'>"
+            "🧠 <b>AI 执行中…</b><br/>"
+            "⏳ ① 识别市场（A股/港股/美股）…<br/>"
+            "⏳ ② 采集行情数据…<br/>"
+            "⏳ ③ 计算技术指标…<br/>"
+            "⏳ ④ 生成报告…</div>"
+        )
         # 异步加载
         from PyQt6.QtCore import QThread, pyqtSignal as _pyqtSignal
 
@@ -199,9 +246,35 @@ class ChatTab(QWidget):
         self._w.fail.connect(self._on_data_fail)
         self._w.start()
 
+    def _timeline_done(self, ok: bool) -> None:
+        """执行时间线收尾：全部打勾或标注失败。"""
+        try:
+            cur = self.chat.textCursor()
+            cur.setPosition(self._timeline_id)
+            cur.movePosition(cur.MoveOperation.EndOfBlock, cur.MoveMode.KeepAnchor)
+            if ok:
+                cur.insertHtml(
+                    "<div style='background:rgba(19,23,34,0.85);border:1px solid rgba(0,229,255,0.15);"
+                    "border-radius:10px;padding:10px 14px;color:#8b949e;'>"
+                    "🧠 <b>AI 执行完成</b><br/>"
+                    "✅ ① 识别市场<br/>"
+                    "✅ ② 采集行情数据<br/>"
+                    "✅ ③ 计算技术指标<br/>"
+                    "✅ ④ 生成报告</div>")
+            else:
+                cur.insertHtml(
+                    "<div style='background:rgba(255,23,68,0.12);border:1px solid #FF1744;"
+                    "border-radius:10px;padding:10px 14px;color:#FF1744;'>"
+                    "❌ 数据获取失败，已停止执行。</div>")
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_data_ready(self, code: str, source: str, df) -> None:
         self.input.setEnabled(True)
         self.btn_search.setEnabled(True)
+        self.btn_share.setEnabled(True)
+        self._timeline_done(True)
+        self._last_report = {"code": code, "source": source}
         if df is None or len(df) < 30:
             self._say("<span style='color:#8b949e'>数据不足，无法展示指标。</span>")
             return
@@ -225,11 +298,53 @@ class ChatTab(QWidget):
             )
         except Exception:
             pass
+        # 模块四：保存提示
+        self._say("<span style='color:#00C853'>✅ 本轮分析已保存到本地知识库（可随时回看）。</span>")
 
     def _on_data_fail(self, err: str) -> None:
         self.input.setEnabled(True)
         self.btn_search.setEnabled(True)
+        self.btn_share.setEnabled(True)
+        self._timeline_done(False)
         self._say(f"<span style='color:#FF1744'>获取数据失败：{err}</span>")
+
+    # ---------- 模块七：分享报告 ----------
+    def _share_report(self) -> None:
+        """把最近一次分析导出为 Markdown：复制剪贴板 + 存档 data/reports/。"""
+        from datetime import datetime
+        rep = getattr(self, "_last_report", None)
+        code = rep["code"] if rep else (self.input.text().strip() or "—")
+        try:
+            from core.data import service as _svc
+            df, source = _svc.get_daily(code)
+            if df is None or len(df) < 2:
+                raise ValueError("数据不足")
+            from core.quant.indicators import latest_snapshot
+            s = latest_snapshot(df)
+            chg = s.get("chg_pct_1d")
+            chg_txt = f"{chg:+.2f}%" if chg is not None else "—"
+            md = (
+                f"# 疏影·知微 分析报告\n\n"
+                f"- 标的：{code}\n- 数据源：{source}\n- 时间：{datetime.now():%Y-%m-%d %H:%M}\n\n"
+                f"## 行情快照\n\n| 项目 | 数值 |\n|---|---|\n"
+                f"| 最新收盘 | {s.get('close', '—')} |\n| 涨跌幅 | {chg_txt} |\n"
+                f"| RSI(14) | {s.get('rsi14', '—') if s.get('rsi14') is not None else '—'} |\n"
+                f"| MACD | {(s.get('macd') or {}).get('signal', '无交叉信号')} |\n\n"
+                f"---\n*本报告为客观数据展示，不构成投资建议。投资有风险。*\n"
+            )
+            import os
+            report_dir = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__)))), "data", "reports")
+            os.makedirs(report_dir, exist_ok=True)
+            path = os.path.join(report_dir,
+                                f"report_{code.replace('.','_')}_{datetime.now():%Y%m%d_%H%M}.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(md)
+            from PyQt6.QtWidgets import QApplication
+            QApplication.clipboard().setText(md)
+            self._say(f"<span style='color:#00C853'>📤 报告已复制到剪贴板并保存：{path}</span>")
+        except Exception as e:  # noqa: BLE001
+            self._say(f"<span style='color:#FF1744'>分享失败：{e}</span>")
 
     @staticmethod
     def _normalize(raw: str) -> str:

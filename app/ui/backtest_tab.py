@@ -31,7 +31,8 @@ class _BacktestWorker(QThread):
         super().__init__()
         self.ticker, self.strategy, self.params = ticker, strategy, params
         self.capital, self.position = capital, position
-        self.start, self.end = start, end
+        # 注意：不能用 self.start 命名，会遮蔽 QThread.start 方法
+        self.start_date, self.end_date = start, end
 
     def run(self) -> None:
         try:
@@ -39,7 +40,7 @@ class _BacktestWorker(QThread):
             market = market_of(self.ticker)
             cfg = BacktestConfig(ticker=self.ticker, market=market,
                                  init_capital=self.capital, position_pct=self.position,
-                                 start=self.start or None, end=self.end or None)
+                                 start=self.start_date or None, end=self.end_date or None)
             res = run_backtest(df, market, self.strategy, self.params, cfg)
             # 留痕：结果落 data/backtests/
             BACKTEST_DIR.mkdir(parents=True, exist_ok=True)

@@ -83,30 +83,49 @@ def add_docs(docs: list[dict], batch: int = 128) -> int:
     """入库。docs 元素：{text, kind(report/news/reflection/resource), ticker, date, title, ref}。
 
     按 kind+ref+序号 生成幂等 id，重复入库自动跳过。返回实际新增条数。
+    chromadb 不可用时自动降级：仅写入本地向量记忆库（memory.vector_memory）。
     """
     if not docs:
         return 0
-    col = _get_collection()
+    col = None
+    try:
+        col = _get_collection()
+    except Exception:  # noqa: BLE001 - chroma 缺失/损坏时降级
+        col = None
     added = 0
-    for i in range(0, len(docs), batch):
-        chunk = docs[i:i + batch]
-        ids = [_doc_id(d["kind"], d.get("ref", ""), i + j) for j, d in enumerate(chunk)]
-        exist = set(col.get(ids=ids)["ids"])
-        new = [(d, _id) for d, _id in zip(chunk, ids) if _id not in exist]
-        if not new:
-            continue
-        ds, idds = zip(*new)
-        col.add(
-            ids=list(idds),
-            documents=[d["text"] for d in ds],
-            embeddings=_embed([d["text"] for d in ds]),
-            metadatas=[{"kind": d["kind"], "ticker": (d.get("ticker") or "")[:20],
-                        "date": (d.get("date") or "")[:10],
-                        "title": (d.get("title") or "")[:200],
-                        "ref": (d.get("ref") or "")[:200]} for d in ds])
-        added += len(idds)
+    if col is not None:
+        for i in range(0, len(docs), batch):
+            chunk = docs[i:i + batch]
+            ids = [_doc_id(d["kind"], d.get("ref", ""), i + j) for j, d in enumerate(chunk)]
+            exist = set(col.get(ids=ids)["ids"])
+            new = [(d, _id) for d, _id in zip(chunk, ids) if _id not in exist]
+            if not new:
+                continue
+            ds, idds = zip(*new)
+            col.add(
+                ids=list(idds),
+                documents=[d["text"] for d in ds],
+                embeddings=_embed([d["text"] for d in ds]),
+                metadatas=[{"kind": d["kind"], "ticker": (d.get("ticker") or "")[:20],
+                            "date": (d.get("date") or "")[:10],
+                            "title": (d.get("title") or "")[:200],
+                            "ref": (d.get("ref") or "")[:200]} for d in ds])
+            added += len(idds)
+    # 同步写入新向量记忆库（学习库普通检索的数据源），保持两库一致
+    try:
+        from memory.vector_memory import add_document as _vm_add
+        for d in docs:
+            _vm_add(f"rag:{_doc_id(d['kind'], d.get('ref', ''), 0)}", d["text"],
+                    {"kind": d["kind"], "ticker": (d.get("ticker") or "")[:20],
+                     "date": (d.get("date") or "")[:10],
+                     "title": (d.get("title") or "")[:200],
+                     "ref": (d.get("ref") or "")[:200]})
+        if col is None:
+            added = len(docs)  # chroma 降级时以向量库写入数为准
+    except Exception:  # noqa: BLE001
+        pass
     if added:
-        log.info("RAG 入库 %d 条（库内共 %d）", added, col.count())
+        log.info("RAG 入库 %d 条（库内共 %d）", added, (col.count() if col is not None else added))
     return added
 
 

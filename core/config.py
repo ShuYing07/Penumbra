@@ -81,6 +81,10 @@ _PRICE_PER_1K = {
 PROXY_ENABLED = os.environ.get("STOCKAI_PROXY", "1") == "1"
 PROXY_URL = os.environ.get("STOCKAI_PROXY_URL", "http://127.0.0.1:7897")
 
+# ---------- 混合推理策略 ----------
+# auto（按任务类型）| structured（确定性优先）| retrieval（检索增强优先）
+REASONING_STRATEGY = os.environ.get("STOCKAI_REASONING_STRATEGY", "auto").strip().lower()
+
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal, QTimer
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget,
     QListWidgetItem, QLabel, QPushButton,
 )
@@ -114,7 +114,7 @@ class StockSearchDialog(QDialog):
             if history:
                 for h in history:
                     item = QListWidgetItem(f"🕐 {h['query']} → {h['code']}")
-                    item.setData(Qt.UserRole, h["code"])
+                    item.setData(Qt.ItemDataRole.UserRole, h["code"])
                     self.result_list.addItem(item)
             else:
                 self._show_all()
@@ -130,7 +130,7 @@ class StockSearchDialog(QDialog):
     def _add_item(self, s: dict):
         item = QListWidgetItem(
             f"{s['ticker']}  {s['name']}  [{s.get('match_type', '')}]")
-        item.setData(Qt.UserRole, s["ticker"])
+        item.setData(Qt.ItemDataRole.UserRole, s["ticker"])
         self.result_list.addItem(item)
 
     def _on_input(self, text: str):
@@ -160,7 +160,7 @@ class StockSearchDialog(QDialog):
 
     def _on_double_click(self, item: QListWidgetItem):
         if item:
-            ticker = item.data(Qt.UserRole)
+            ticker = item.data(Qt.ItemDataRole.UserRole)
             # 记录搜索历史
             stock_index.log_search(self.search_input.text().strip(), ticker)
             self.selected.emit(ticker)

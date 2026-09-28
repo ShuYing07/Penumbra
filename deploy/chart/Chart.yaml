@@ -1,0 +1,8 @@
+# 疏影·知微 企业版 Helm Chart（模块七，K8s 部署模板）
+# 使用：helm install shuying ./deploy/chart --values ./deploy/chart/values.yaml
+apiVersion: v2
+name: shuying
+description: 疏影·知微 企业版（API + Worker）
+type: application
+version: 0.7.0
+appVersion: "0.7.0"

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shuying-api
+  labels:
+    app: shuying-api
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: shuying-api
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: 8000

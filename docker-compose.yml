@@ -1,0 +1,61 @@
+# 疏影·知微 企业版 —— Docker Compose（模块七）
+# 用法：cp .env.docker .env && docker compose up -d
+# 注意：桌面版不需要；本编排面向私有化部署的 API/Worker 服务。
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shuying}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-shuying}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shuying}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [shuying]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [shuying]
+
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shuying}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-shuying}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change_me_too}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [shuying]
+
+  worker:
+    build: .
+    command: python -m celery -A api.worker worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shuying}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-shuying}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+    networks: [shuying]
+
+networks:
+  shuying:
+
+volumes:
+  pg_data:
+  redis_data:

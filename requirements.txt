@@ -13,5 +13,34 @@ pyqt6
 pyqtgraph
 matplotlib
 
+# 可选：拼音搜索（Ctrl+K 命令面板输入 gzmt → 贵州茅台）
+# pypinyin            # 未安装时拼音缩写自动降级为名称子串匹配
+
 # 可选：本地 GGUF 推理后端（Windows 需编译工具，见 LOCAL_AI_GUIDE.md）
 # llama-cpp-python
+
+# ===== 企业版（可选，需手动安装；未安装不影响桌面版运行）=====
+# REST API 服务（模块三）
+fastapi
+uvicorn[standard]
+# 认证与 RBAC（模块二；桌面版已用标准库实现等价功能，安装后走加密库）
+python-jose[cryptography]
+passlib[bcrypt]
+# 多租户 / 外部数据库（模块二/五）
+sqlalchemy
+psycopg2-binary
+redis
+
+# ---- 企业版/深化模块（可选；未安装不影响桌面版）----
+# fastapi==0.115.*            # REST API + Web UI（python -m api.main / web_ui.app）
+# uvicorn[standard]==0.32.*   # ASGI 服务
+# python-jose[cryptography]   # 生产认证（当前为标准库 JWT 等价实现）
+# passlib[bcrypt]             # 生产密码哈希（当前为 PBKDF2 标准库实现）
+# cryptography==44.*          # 哈希链审计增强（当前为标准库 SHA-256 实现）
+# pyjwt==2.10.*               # JWT（当前为标准库 HMAC-SHA256 实现）
+# chromadb==0.5.*             # 向量记忆（未装时自动降级 SQLite 哈希向量）
+# neo4j==5.*                  # 图记忆（未装时自动降级 SQLite 图存储）
+# rank_bm25==0.2.*            # BM25 关键词检索增强
+# pyiceberg                  # 湖仓时间旅行（data_pipeline/lakehouse，未装自动降级 SQLite 快照）
+# pyspark                    # 流式处理（data_pipeline/stream_processor，未装自动降级内置滑窗）
+# pyzmq                      # Sidecar 行情网关通道（未装自动降级内存队列）

@@ -14,13 +14,31 @@
 ## 🖥️ 界面预览
 
 ![主界面](docs/screenshots/main.png)
-*暗色三栏布局：自选股 | K线图 | 信息面板*
+*任务导向分组导航（发现/研究/验证/积累）+ 可停靠 Widget 工作区*
 
 ![K线图](docs/screenshots/chart.png)
-*蜡烛图 + MA均线 + 布林带 + 成交量副图*
+*蜡烛图 + MA均线 + 布林带 + 成交量副图 + 悬停图例 + 区间按钮*
 
 ![多空辩论](docs/screenshots/debate.png)
 *Claim-level 结构化多空对抗*
+
+![市场概览](docs/screenshots/overview.png)
+*宽基指数 + 板块热力图（Treemap）*
+
+---
+
+## 🎨 UI 设计系统（0.7.x 起）
+
+**疏影·知微** 的界面参考了 OpenBB Workspace / FreqUI / Stonks / OpenTerminal 等开源项目的设计，采用 **任务导向分组导航 + 玻璃拟态暗色主题 + 键盘驱动交互**：
+
+- **信息架构**：左侧导航按任务阶段分组 —— `发现`（找标的）→ `研究`（深理解）→ `验证`（验判断）→ `积累`（沉淀知识）；右侧信息面板为 **QDockWidget 可停靠工作区**，可浮动/关闭，布局自动保存、下次启动恢复（`视图` 菜单可恢复默认布局）。
+- **视觉风格**：暗色玻璃态（主背景 `#0A0E17`，卡片半透明 + 1px 青色细边 + 大圆角）；顶部状态栏一键切换 **暗色/浅色** 主题（快捷键 `Ctrl+M`）。
+- **键盘驱动**：`Ctrl+K` 全局命令面板（搜功能/股票/历史，支持拼音缩写如 `gzmt`→贵州茅台）；`Ctrl+1~9` 快速切换导航；`Ctrl+Shift+A` 唤起 AI 对话、`Ctrl+Shift+B` 多空辩论、`Ctrl+Shift+R` 运行回测。
+- **对话式首页**：打开程序即对话输入框 + 三个快捷入口（分析个股/多空辩论/今日复盘）；AI 执行过程以**时间线**逐步打勾（识别市场→采集行情→计算指标→生成报告），不再干等。
+- **图表升级**：K线图悬停显示 OHLC+均线+成交量图例，支持 1M/3M/6M/1Y/MAX 区间切换；市场概览内置**板块热力图**（面积≈成交额，颜色=涨跌幅）。
+- **首次启动**：3 页欢迎引导（可跳过）+ 默认自选股（茅台/苹果/沪深300/宁德/腾讯）+ 空状态友好提示。
+
+> 完整设计规范与配色 Token 见 [`docs/UI_GUIDE.md`](docs/UI_GUIDE.md)。
 
 ---
 
@@ -65,10 +83,12 @@
 ## 🚀 5分钟快速上手
 
 1. **下载解压** → 双击 `疏影知微.exe`
-2. **首次启动** → 自动加载示例（贵州茅台 600519）
-3. **查看K线** → 左侧点击"K线图"，看技术指标
-4. **运行分析** → 对话分析页输入代码，点击搜索
-5. **多空辩论** → 左侧点击"多空辩论"，查看结构化对抗
+2. **首次启动** → 3 页欢迎引导（可跳过）+ 自动加载示例（贵州茅台 600519）
+3. **看行情** → 左侧 `研究 → K线图`，或直接按 `Ctrl+K` 输入 `600519` / `gzmt` 跳转
+4. **运行分析** → 对话分析页输入代码回车，看 AI 执行时间线逐步打勾
+5. **多空辩论** → 左侧点击"多空辩论"，或按 `Ctrl+Shift+B`，查看结构化对抗
+
+> 💡 常用快捷键：`Ctrl+K` 全局命令面板 · `Ctrl+M` 切换明暗主题 · `Ctrl+1~9` 快速切导航
 
 ---
 
@@ -101,6 +121,59 @@
 
 ### 📝 决策日志
 每次AI分析自动落库（本地SQLite），支持复盘与导出。
+
+---
+
+## 🧠 本地模型（可选，完全离线）
+
+程序默认走云端 API（需自行配置 Key）。想**完全离线**运行，可选装本地模型：
+
+1. 安装 [Ollama](https://ollama.com) 并拉取模型：
+   ```bash
+   ollama pull qwen3:7b
+   ```
+2. 程序启动时自动检测本地模型并降级使用，无需额外配置。
+
+> `models/` 目录用于存放可选大模型（如 Qwen2.5-3B-Instruct、Kronos），需手动下载放置，详见 [models/README.md](models/README.md)。**不下载也不影响使用**——自动降级到云端 API。
+
+---
+
+## 🏢 企业版（Enterprise）
+
+面向团队与机构：多租户隔离、RBAC 权限、操作审计、协作空间、组合风控、合规规则引擎、REST API、私有化部署（Docker/K8s）。
+
+- 文档：[docs/ENTERPRISE.md](docs/ENTERPRISE.md) · [docs/COMPLIANCE.md](docs/COMPLIANCE.md)
+- API：安装 `pip install fastapi uvicorn[standard]` 后运行 `python -m api.main`，接口见 [docs/API.md](docs/API.md)
+
+| 能力 | 社区版 | 企业版 |
+|------|-------|--------|
+| 多租户隔离 / RBAC / 审计日志 | ❌ | ✅ |
+| 协作空间 / 版本控制 | ❌ | ✅ |
+| 组合风控（VaR/压力测试） | ❌ | ✅ |
+| 合规规则引擎（禁投/仓位上限） | ❌ | ✅ |
+| REST API + 私有化部署 | ❌ | ✅ |
+
+**本版新增的企业级/国际化深化模块（0.7.x 前瞻）**：
+
+| 模块 | 目录 | 说明 |
+|---|---|---|
+| Agent Mesh 智能体网格 | `agent_mesh/` | Agent 注册/身份/策略执行/可观测账本 |
+| 零信任安全 | `security/` | 持续认证、上下文授权、哈希链审计 |
+| 双层级记忆 | `memory/` | 向量记忆（ChromaDB）+ 图记忆（Neo4j/内存图）+ 混合检索 |
+| 混合推理 | `reasoning/` | auto/structured/retrieval 动态策略 + 置信度门控 |
+| 数据网格 | `data_mesh/` | 数据域、数据目录、数据契约 |
+| 实时流处理 | `streaming/` | 事件总线、流式摄取、背压与窗口计算 |
+| HERMES 分层 Agent | `hermes/` | 五层检索-验证-合成-共识-报告，自适应共识 |
+| Swarm 估值 | `valuation_swarm/` | 3任务×3Agent 估值 + 辩论对齐比例投票 |
+| 湖仓与流管道 | `data_pipeline/` | 版本快照湖仓（时间旅行）、Sidecar 行情网关 |
+| 微前端 | `micro_frontend/` | Shell + 独立功能模块 + 统一安全层 |
+| 主权 Agent（SAFE） | `sovereign_agent/` | 私有化部署、BYOM 模型注册、成本追踪 |
+| 持续合规监控 | `compliance/` | 实时监测 + 人工审核队列 + 可配置规则引擎 |
+| 国际化数据适配器 | `data_adapters/` | Bloomberg/LSEG/Wind/AKShare/yfinance 统一接口 |
+
+文档：[docs/ENTERPRISE_DEPLOYMENT.md](docs/ENTERPRISE_DEPLOYMENT.md) ·
+[docs/FINOS_INTEGRATION.md](docs/FINOS_INTEGRATION.md) ·
+[docs/PRODUCT_FOCUS.md](docs/PRODUCT_FOCUS.md)
 
 ---
 

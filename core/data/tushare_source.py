@@ -87,3 +87,28 @@ def fetch_fundamental(ticker: str) -> dict:
         "total_mv_yi": round(_f(r.get("total_mv")) / 10000.0, 1) if r.get("total_mv") else None,
         "turnover": _f(r.get("turnover_rate")),
     }
+
+
+def fetch_index_daily(code6: str) -> pd.DataFrame:
+    """Tushare 指数日线（index_daily）。code6 为 6 位指数代码（000300 / 399001）。
+
+    与 fetch_daily_cn 同构：index=date, cols=open/high/low/close/volume/amount。
+    需 TUSHARE_TOKEN 且积分足够；失败抛错，由调用方降级。
+    """
+    pro = _get_pro()
+    ts_code = f"{code6}.SH" if code6.startswith("000") else f"{code6}.SZ"
+    df = pro.index_daily(ts_code=ts_code)
+    if df is None or df.empty:
+        raise RuntimeError(f"Tushare 指数日线为空: {ts_code}")
+    df = df.sort_values("trade_date").copy()
+    out = pd.DataFrame({
+        "date": pd.to_datetime(df["trade_date"]),
+        "open": df["open"].astype(float).values,
+        "high": df["high"].astype(float).values,
+        "low": df["low"].astype(float).values,
+        "close": df["close"].astype(float).values,
+        "volume": df["vol"].astype(float).values,
+        "amount": df["amount"].astype(float).values if "amount" in df else None,
+    }).set_index("date").sort_index()
+    log.info("Tushare 指数日线 %s 行数=%d", ts_code, len(out))
+    return out

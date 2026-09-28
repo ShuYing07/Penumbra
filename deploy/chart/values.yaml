@@ -1,0 +1,37 @@
+# values.yaml —— Helm 部署参数（模块七）
+replicaCount: 1
+
+image:
+  repository: ghcr.io/shuying07/shuying
+  tag: 0.7.0
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+postgres:
+  enabled: true
+  size: 10Gi
+
+redis:
+  enabled: true
+  size: 2Gi
+
+env:
+  POSTGRES_USER: shuying
+  POSTGRES_PASSWORD: change_me
+  POSTGRES_DB: shuying
+  JWT_SECRET: change_me
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+ingress:
+  enabled: false
+  host: api.example.com

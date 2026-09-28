@@ -27,7 +27,8 @@ class _OptimizeWorker(QThread):
         super().__init__()
         self.ticker, self.strategy, self.spec = ticker, strategy, spec
         self.objective, self.split = objective, split
-        self.start, self.end = start, end
+        # 不能叫 self.start，会遮蔽 QThread.start 方法
+        self.start_date, self.end_date = start, end
 
     def run(self) -> None:
         try:
@@ -36,7 +37,7 @@ class _OptimizeWorker(QThread):
             df, _ = get_daily(self.ticker)
             market = market_of(self.ticker)
             cfg = BacktestConfig(ticker=self.ticker, market=market,
-                                 start=self.start or None, end=self.end or None)
+                                 start=self.start_date or None, end=self.end_date or None)
             out = opt.optimize(df, market, self.strategy, self.spec, cfg,
                                objective=self.objective, split=self.split,
                                progress_cb=lambda stage, i, t: self.progress.emit(

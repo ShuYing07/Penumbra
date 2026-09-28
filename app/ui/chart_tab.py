@@ -115,6 +115,15 @@ class ChartTab(QWidget):
         self.boll_box = QCheckBox("布林带")
         self.boll_box.stateChanged.connect(self._redraw)
         top.addWidget(self.boll_box)
+        # 模块五：区间选择按钮（1M/3M/6M/1Y/MAX）
+        for label, n in (("1M", 60), ("3M", 90), ("6M", 180), ("1Y", 250), ("MAX", 1200)):
+            rb = QPushButton(label)
+            rb.setCheckable(True)
+            rb.setStyleSheet(
+                "QPushButton{padding:3px 10px; border-radius:8px;}"
+                "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}")
+            rb.clicked.connect(lambda _=False, _n=n, _b=rb: self._set_range(_n, _b))
+            top.addWidget(rb)
         top.addStretch()
         self.status = QLabel("")
         top.addWidget(self.status)
@@ -144,6 +153,15 @@ class ChartTab(QWidget):
         v.addWidget(self.price, 1)
         v.addWidget(self.vol, 0)
 
+    def _set_range(self, n: int, btn=None) -> None:
+        """区间按钮：设置显示根数并重绘（同一时刻仅一个区间高亮）。"""
+        for b in self.findChildren(QPushButton):
+            if b.text() in ("1M", "3M", "6M", "1Y", "MAX"):
+                b.setChecked(False)
+        if btn is not None:
+            btn.setChecked(True)
+        self.win_box.setValue(n)
+
     def _on_mouse(self, pos):
         if not self.price.scene():
             return
@@ -160,7 +178,27 @@ class ChartTab(QWidget):
         self._hline.setPos(y)
         self._vline.setVisible(True)
         self._hline.setVisible(True)
-        self._tooltip.setText(f"x={x}, y={y:.2f}")
+        # 模块五：悬停图例 —— 显示该根 K 线的 OHLC / 成交量 / 均线值
+        text = f"x={x}, y={y:.2f}"
+        bars = self._bars
+        if bars is not None and len(bars) > 0:
+            view = bars.tail(self.win_box.value())
+            if 0 <= x < len(view):
+                try:
+                    row = view.iloc[x]
+                    o, h, l, c = (float(row["open"]), float(row["high"]),
+                                  float(row["low"]), float(row["close"]))
+                    vol = float(row.get("volume", 0))
+                    text = (f"<b>OHLC</b> 开 {o:.2f} / 高 {h:.2f} / 低 {l:.2f} / 收 {c:.2f}<br/>"
+                            f"量 {vol:,.0f}　")
+                    close_full = bars["close"].astype(float)
+                    for n_, _color in MA_STYLES:
+                        ma = ind.sma(close_full, n_).iloc[x + max(len(bars) - len(view), 0)]
+                        if ma == ma:  # 过滤 NaN
+                            text += f"MA{n_} {ma:.2f}　"
+                except Exception:  # noqa: BLE001
+                    pass
+        self._tooltip.setText(text)
         self._tooltip.setPos(x, y)
         self._tooltip.setVisible(True)
 

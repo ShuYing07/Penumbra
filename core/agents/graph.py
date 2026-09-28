@@ -98,12 +98,15 @@ def _filter_news_asof(news: list, as_of: str) -> list:
     return out
 
 
-def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> AnalysisState:
+def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None,
+                 light: bool = False) -> AnalysisState:
     """采集事实。as_of 非空时进入历史回放模式：
 
     - bars 严格截断到 as_of（无前视）；quote 用截断末根 K 线构造（不取实时）；
     - 新闻按 published_at<=as_of best-effort 过滤；反思上下文置空（不看未来反思）；
     - 基本面免费源无历史值，保留当前快照并打 _as_of_note 局限标注。
+    - light=True（批量回放 mock 模式）：跳过 ML 训练/Kronos 推理/相似形态检索等
+      重计算，这些增强信号在回放场景价值低且逐点全量重算极慢。
     """
     def cb(text: str) -> None:
         log.info("%s", text)
@@ -136,14 +139,32 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
             quote = _quote_from_bar(bars)
 
     cb("采集基本面资料…")
-    funda = service.get_fundamentals(ticker)
     if replay:
-        funda = dict(funda)
+        # 免费源无历史基本面：同一标的回放时快照不变，缓存一次避免逐点联网
+        if ticker not in _REPLAY_FUNDA_CACHE:
+            try:
+                _REPLAY_FUNDA_CACHE[ticker] = dict(service.get_fundamentals(ticker))
+            except Exception as e:  # noqa: BLE001
+                log.warning("回放基本面获取失败：%s", e)
+                _REPLAY_FUNDA_CACHE[ticker] = {}
+        funda = dict(_REPLAY_FUNDA_CACHE[ticker])
         funda["_as_of_note"] = f"历史回放({as_of})：免费源无历史基本面，此为当前快照，非时点值"
+    else:
+        funda = service.get_fundamentals(ticker)
     cb("采集新闻资讯…")
-    news = service.get_news(ticker)
     if replay:
+        # 回放：先走标准新闻源（测试可mock），无结果/失败时降级到本地缓存新闻库，
+        # 避免逐点联网阻塞；随后按 published_at 时点过滤（防前视）。
+        try:
+            news = service.get_news(ticker)
+            if not news:
+                news = cache.load_news(None, 500)
+        except Exception as e:  # noqa: BLE001
+            log.warning("回放新闻获取失败（降级本地缓存）：%s", e)
+            news = cache.load_news(None, 500)
         news = _filter_news_asof(news, as_of)
+    else:
+        news = service.get_news(ticker)
     cb(f"新闻 {ticker}：{len(news)} 条，开始计算技术指标…")
 
     tech = latest_snapshot(bars)
@@ -160,11 +181,16 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
         log.warning("市场状态判别失败：%s", e)
         regime = {"regime": "range", "note": "判别失败", "position_multiplier": 0.75}
     # ML 集成信号（三期增强）：随机森林从技术特征学未来5日方向，纯本地
-    try:
-        ml = ml_signal(bars)
-    except Exception as e:  # noqa: BLE001
-        log.warning("ML信号失败：%s", e)
-        ml = {"up_prob": None, "signal": "不可用", "note": str(e)[:100]}
+    # 批量回放精简模式跳过（逐点重训随机森林开销极大且价值低）
+    if light:
+        ml = {"up_prob": None, "signal": "回放精简模式跳过",
+              "note": "mock 批量回放跳过 ML 训练"}
+    else:
+        try:
+            ml = ml_signal(bars)
+        except Exception as e:  # noqa: BLE001
+            log.warning("ML信号失败：%s", e)
+            ml = {"up_prob": None, "signal": "不可用", "note": str(e)[:100]}
     # 程序量化综合分（融合多因子+ML+市场状态）
     quant = quantitative_score(factors, ml, regime)
     # FinBERT 本地金融情感（对新闻标题打情感分，零token）
@@ -174,12 +200,15 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
     except Exception as e:  # noqa: BLE001
         log.warning("FinBERT情感失败：%s", e)
         sentiment_ml = {"mood": "不可用", "avg_score": 0.0, "n": 0}
-    # Kronos 短期K线预测（本地基础模型）
-    try:
-        kronos = kronos_forecast.forecast(bars)
-    except Exception as e:  # noqa: BLE001
-        log.warning("Kronos预测失败：%s", e)
-        kronos = {"up_pct": None, "direction": "不可用", "note": str(e)[:80]}
+    # Kronos 短期K线预测（本地基础模型）；批量回放精简模式跳过
+    if light:
+        kronos = {"up_pct": None, "direction": "不可用", "note": "回放精简模式跳过 Kronos"}
+    else:
+        try:
+            kronos = kronos_forecast.forecast(bars)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Kronos预测失败：%s", e)
+            kronos = {"up_pct": None, "direction": "不可用", "note": str(e)[:80]}
     asof = as_of or tech.get("asof") or quote.get("date") or now_cn().strftime("%Y-%m-%d")
 
     if replay:
@@ -195,13 +224,16 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
             history = []
 
     # 相似历史形态检索（四期）：近20日形态 vs 全历史，含其后真实表现
-    # 回放时 bars 已截断，find_similar 自然只能见到 as_of 之前的数据
-    try:
-        from core.memory.patterns import find_similar
-        patterns, _agg = find_similar(bars)
-    except Exception as e:  # noqa: BLE001
-        log.warning("相似形态检索失败：%s", e)
+    # 回放时 bars 已截断，find_similar 自然只能见到 as_of 之前的数据；批量回放精简模式跳过
+    if light:
         patterns = []
+    else:
+        try:
+            from core.memory.patterns import find_similar
+            patterns, _agg = find_similar(bars)
+        except Exception as e:  # noqa: BLE001
+            log.warning("相似形态检索失败：%s", e)
+            patterns = []
 
     return {
         "ticker": ticker,
@@ -227,11 +259,18 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None) -> Ana
     }
 
 
-def build_graph(runner: LLMRunner):
+_GRAPH_CACHE: dict = {}
+_REPLAY_FUNDA_CACHE: dict = {}
+
+
+def build_graph(runner: LLMRunner, _cache_key: str | None = None):
     """串行DAG编排（稳定优先）：
     - START → technical → fundamental → news → sentiment
     - 4分析师完成 → bull → bear → trader → risk → END
+    - 批量回放传 _cache_key 复用已编译图（逐点重编译开销极大）。
     """
+    if _cache_key and _cache_key in _GRAPH_CACHE:
+        return _GRAPH_CACHE[_cache_key]
     builder = StateGraph(AnalysisState)
     for name, fn in bind(runner):
         builder.add_node(name, fn)
@@ -250,7 +289,10 @@ def build_graph(runner: LLMRunner):
     builder.add_edge("bear", "trader")
     builder.add_edge("trader", "risk")
     builder.add_edge("risk", END)
-    return builder.compile(checkpointer=MemorySaver())
+    g = builder.compile(checkpointer=MemorySaver())
+    if _cache_key:
+        _GRAPH_CACHE[_cache_key] = g
+    return g
 
 
 def _delta_degraded(node_key: str, delta: dict) -> bool:
@@ -283,14 +325,19 @@ def degraded_nodes(state: dict) -> list[str]:
 
 
 def execute_state(state: dict, runner: LLMRunner, progress_cb=None,
-                  thread_suffix: str | None = None) -> dict:
+                  thread_suffix: str | None = None, cache_graph: bool = False) -> dict:
     """对已采集的 state 跑 LangGraph 多节点DAG，返回补全 final 的 state（不落库）。
 
     并行模式：4分析师并行 → 多空并行 → trader → risk。
     额外追踪每个节点的耗时，写入 state["node_timing"]。
+    cache_graph=True 时复用已编译图（批量回放提速，普通单次分析不启用）。
     """
     import time
-    graph = build_graph(runner)
+    cache_key = None
+    if cache_graph:
+        cache_key = ("mock" if getattr(runner, "mock", False) else "real",
+                     getattr(runner, "backend", "deepseek"))
+    graph = build_graph(runner, _cache_key=cache_key)
     suffix = thread_suffix or now_cn().strftime("%Y%m%d%H%M%S")
     thread_id = f"{state['ticker'].upper()}-{suffix}"
     config = {"configurable": {"thread_id": thread_id}}
@@ -324,7 +371,8 @@ def execute_state(state: dict, runner: LLMRunner, progress_cb=None,
 
 
 def run_analysis(ticker: str, runner: LLMRunner | None = None, progress_cb=None,
-                 as_of: str | None = None, persist: bool = True) -> dict:
+                 as_of: str | None = None, persist: bool = True,
+                 cache_graph: bool = False, light: bool = False) -> dict:
     """对单个标的跑完整管线，返回 {state, decision_id}。
 
     progress_cb(kind, payload)：
@@ -333,6 +381,8 @@ def run_analysis(ticker: str, runner: LLMRunner | None = None, progress_cb=None,
 
     as_of 非空=历史回放模式（数据时点截断）；persist=False 时不写 decisions 表、
     不入 RAG（回放信号走独立 ai_replay_signals 表，避免污染真实统计）。
+    cache_graph=True 供批量回放复用已编译图（大幅提速）；
+    light=True 供批量 mock 回放跳过 ML/Kronos/形态检索等重计算。
     """
     cache.init_db()
     # 冷库首次运行时 decisions 表需先就位，否则反思上下文查询告警
@@ -345,10 +395,12 @@ def run_analysis(ticker: str, runner: LLMRunner | None = None, progress_cb=None,
     own_runner = runner is None
     runner = runner or LLMRunner()
     runner.meta = {"ticker": ticker}  # 蒸馏语料随节点输出一起记录
-    state = _to_native(gather_facts(ticker, progress_cb=progress_cb, as_of=as_of))
+    state = _to_native(gather_facts(ticker, progress_cb=progress_cb, as_of=as_of,
+                                    light=light))
     result = execute_state(
         state, runner, progress_cb,
-        thread_suffix=f"{as_of}-{now_cn():%H%M%S}" if as_of else None)
+        thread_suffix=f"{as_of}-{now_cn():%H%M%S}" if as_of else None,
+        cache_graph=cache_graph)
     decision_id = None
     if persist and as_of is None:
         decision_id = save_decision(result)

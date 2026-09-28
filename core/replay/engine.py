@@ -105,7 +105,8 @@ def run_one(ticker: str, as_of: str, runner: LLMRunner | None = None) -> dict:
     """单个历史时点跑一次管线（不持久化到 decisions/RAG），返回 final 决策 dict。"""
     from core.agents.graph import run_analysis
 
-    res = run_analysis(ticker, runner=runner, as_of=as_of, persist=False)
+    res = run_analysis(ticker, runner=runner, as_of=as_of, persist=False,
+                       cache_graph=True, light=True)
     final = (res.get("state") or {}).get("final") or {}
     if not final:
         raise RuntimeError("管线未产出 final 决策")

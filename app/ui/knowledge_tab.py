@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                             QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+                             QVBoxLayout, QWidget)
 
 from core.data import service
 from core.memory import patterns as pat_mod
@@ -22,17 +22,39 @@ class _RagWorker(QThread):
     got = pyqtSignal(list, dict)   # 检索结果 or 空列表, stats
     bad = pyqtSignal(str)
 
-    def __init__(self, op: str, query: str = "", kind=None, parent=None):
+    def __init__(self, op: str, query: str = "", kind=None, use_hybrid: bool = False,
+                 parent=None):
         super().__init__(parent)
         self.op, self.query, self.kind = op, query, kind
+        self.use_hybrid = use_hybrid
 
     def run(self) -> None:
         try:
             if self.op == "index":
                 n = (rag.index_reports() + rag.index_news() + rag.index_reflections())
                 self.got.emit([{"info": f"入库完成，新增 {n} 条"}], rag.stats())
+            elif self.use_hybrid:
+                from memory.hybrid_memory import search as _hs
+                hits = _hs(self.query, top_k=10)
+                out = []
+                for h in hits:
+                    meta = dict(h.get("meta") or {})
+                    meta.setdefault("kind", "—")
+                    out.append({"doc": h.get("text", ""), "meta": meta,
+                                "score": h.get("score", 0)})
+                self.got.emit(out, {"total": len(hits), "engine": "hybrid"})
             else:
-                self.got.emit(rag.search(self.query, kind=self.kind, n=10), rag.stats())
+                from memory.vector_memory import retrieve_similar as _vs
+                hits = _vs(self.query, top_k=30)
+                if self.kind:
+                    hits = [h for h in hits if (h.get("meta") or {}).get("kind") == self.kind]
+                out = [{"doc": h.get("text", ""), "meta": dict(h.get("meta") or {}),
+                        "score": h.get("score", 0)} for h in hits[:10]]
+                by: dict[str, int] = {}
+                for h in hits:
+                    k = (h.get("meta") or {}).get("kind") or "—"
+                    by[k] = by.get(k, 0) + 1
+                self.got.emit(out, {"total": len(hits), "by_kind": by, "engine": "vector"})
         except Exception as e:  # noqa: BLE001
             self.bad.emit(f"{type(e).__name__}: {e}")
 
@@ -73,6 +95,9 @@ class KnowledgeTab(QWidget):
         for label, _ in _KINDS:
             self.kind_box.addItem(label)
         row1.addWidget(self.kind_box)
+        self.hybrid_box = QCheckBox("融合检索（向量+图+BM25）")
+        self.hybrid_box.setToolTip("同时检索向量记忆、实体关系图与BM25关键词，融合重排")
+        row1.addWidget(self.hybrid_box)
         btn = QPushButton("搜索")
         btn.clicked.connect(self._do_search)
         row1.addWidget(btn)
@@ -156,7 +181,8 @@ class KnowledgeTab(QWidget):
         if self._rag_worker and self._rag_worker.isRunning():
             return
         kind = _KINDS[self.kind_box.currentIndex()][1]
-        self._rag_worker = _RagWorker("search", self.query.text().strip(), kind)
+        self._rag_worker = _RagWorker("search", self.query.text().strip(), kind,
+                                      self.hybrid_box.isChecked())
         self._rag_worker.got.connect(self._on_search)
         self._rag_worker.bad.connect(self._on_bad)
         self._rag_worker.start()
@@ -191,10 +217,14 @@ class KnowledgeTab(QWidget):
     def _on_search(self, results, stats) -> None:
         self.btn_index.setEnabled(True)
         by = stats.get("by_kind", {})
-        self.lbl_stats.setText(
-            f"学习库：共 {stats.get('total', 0)} 条"
-            f"（报告 {by.get('report', 0)} / 新闻 {by.get('news', 0)}"
-            f" / 反思 {by.get('reflection', 0)}）")
+        if stats.get("engine") == "hybrid":
+            self.lbl_stats.setText(
+                f"融合检索（向量+图+BM25）：共 {stats.get('total', 0)} 条")
+        else:
+            self.lbl_stats.setText(
+                f"学习库：共 {stats.get('total', 0)} 条"
+                f"（报告 {by.get('report', 0)} / 新闻 {by.get('news', 0)}"
+                f" / 反思 {by.get('reflection', 0)}）")
         infos = [r for r in results if r.get("info")]
         if infos:
             self.rag_table.setRowCount(0)

@@ -21,8 +21,56 @@ from core.config import now_cn
 log = logging.getLogger("stockai.data")
 
 
+# ---------------------------------------------------------------------------
+# A股指数映射（模块一）
+# 各数据源代码与名称；000001 刻意不在默认表内——它是深市"平安银行"股票代码，
+# 若要上证指数请输入 sh000001（可自行在本表追加后重启）。
+# 降级链：AKShare(index_zh_a_hist→sina) → Tushare(index_daily) → yfinance → 缓存兜底
+# ---------------------------------------------------------------------------
+INDEX_MAP: dict[str, dict] = {
+    "000300": {"akshare": "000300", "yfinance": "000300.SS", "tushare": "000300.SH",
+               "sina": "sh000300", "name": "沪深300"},
+    "000905": {"akshare": "000905", "yfinance": "000905.SS", "tushare": "000905.SH",
+               "sina": "sh000905", "name": "中证500"},
+    "000016": {"akshare": "000016", "yfinance": "000016.SS", "tushare": "000016.SH",
+               "sina": "sh000016", "name": "上证50"},
+    "000688": {"akshare": "000688", "yfinance": "000688.SS", "tushare": "000688.SH",
+               "sina": "sh000688", "name": "科创50"},
+    "000852": {"akshare": "000852", "yfinance": "000852.SS", "tushare": "000852.SH",
+               "sina": "sh000852", "name": "中证1000"},
+    "000903": {"akshare": "000903", "yfinance": "000903.SS", "tushare": "000903.SH",
+               "sina": "sh000903", "name": "中证100"},
+    "000010": {"akshare": "000010", "yfinance": "000010.SS", "tushare": "000010.SH",
+               "sina": "sh000010", "name": "上证180"},
+    "000009": {"akshare": "000009", "yfinance": "000009.SS", "tushare": "000009.SH",
+               "sina": "sh000009", "name": "上证380"},
+    "399001": {"akshare": "399001", "yfinance": "399001.SZ", "tushare": "399001.SZ",
+               "sina": "sz399001", "name": "深证成指"},
+    "399006": {"akshare": "399006", "yfinance": "399006.SZ", "tushare": "399006.SZ",
+               "sina": "sz399006", "name": "创业板指"},
+    "399005": {"akshare": "399005", "yfinance": "399005.SZ", "tushare": "399005.SZ",
+               "sina": "sz399005", "name": "中小100"},
+    "399300": {"akshare": "399300", "yfinance": "399300.SZ", "tushare": "399300.SZ",
+               "sina": "sz399300", "name": "沪深300(深)"},
+}
+
+
+def index_code_of(raw: str) -> str | None:
+    """从用户输入提取已注册的 6 位指数代码：
+    '000300' / 'sh000300' / 'SH000300' / '000300.SS' / '000300.SH' → '000300'；否则 None。"""
+    t = raw.strip().upper()
+    if not t:
+        return None
+    bare = re.sub(r"^(SH|SZ|BJ)", "", t)
+    bare = re.sub(r"\.(SS|SZ|SH|SSE|SHS)$", "", bare)
+    if re.fullmatch(r"\d{6}", bare) and bare in INDEX_MAP:
+        return bare
+    return None
+
+
 def normalize_ticker(raw: str) -> str:
     """用户输入标准化：
+    - 指数：'000300' / 'sh000300' / '000300.SS' → '000300'（命中 INDEX_MAP 时直通）
     - '600519' → 'SH600519'（6/5/9开头→沪市）
     - '000001' → 'SZ000001'（0/3/1/2/4/7/8开头→深市）
     - 已带 SH/SZ/BJ 前缀或含 . / - 的原样返回
@@ -30,6 +78,9 @@ def normalize_ticker(raw: str) -> str:
     t = raw.strip().upper()
     if not t:
         return t
+    idx = index_code_of(t)
+    if idx:
+        return idx
     if re.match(r"^(SH|SZ|BJ)\d", t) or "." in t or "-" in t:
         return t
     if re.fullmatch(r"\d{6}", t):
@@ -39,6 +90,8 @@ def normalize_ticker(raw: str) -> str:
 
 def market_of(ticker: str) -> str:
     t = normalize_ticker(ticker)
+    if re.fullmatch(r"\d{6}", t) and t in INDEX_MAP:
+        return "CN_INDEX"
     if re.fullmatch(r"(SH|SZ)\d{6}", t):
         return "CN"
     if re.fullmatch(r"[A-Z0-9]{2,15}-(USD|USDT|USDC)", t):
@@ -75,12 +128,22 @@ def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
     cached = cache.load_bars(ticker)
     today = now_cn().strftime("%Y-%m-%d")
 
-    fresh = len(cached) > 0 and cached.index.max().strftime("%Y-%m-%d") >= _last_trade_day_hint(today)
+    last_dt = cached.index.max().strftime("%Y-%m-%d") if len(cached) > 0 else "1970-01-01"
+    # 新鲜度：缓存最后日期距今 ≤7 个自然日即视为可用（覆盖周末/长假/数据源滞后，避免反复联网）
+    stale_days = (pd.Timestamp(today) - pd.Timestamp(last_dt)).days
+    fresh = len(cached) > 0 and stale_days <= 7
     if use_cache and len(cached) >= 60 and fresh:
         return cached, "cache"
 
     try:
-        if market == "CN":
+        if market == "CN_INDEX":
+            # 指数：AKShare(东财→新浪→Tushare) 主链，失败再走 yfinance 兜底
+            try:
+                new_df = ak_src.fetch_daily_index(ticker)
+            except Exception as e:  # noqa: BLE001
+                log.warning("指数 A股源失败 %s: %s；尝试 yfinance 兜底", ticker, e)
+                new_df = yf_src.fetch_daily_global(INDEX_MAP[ticker]["yfinance"])
+        elif market == "CN":
             new_df = ak_src.fetch_daily_cn(ticker)
         elif market in ("US", "HK", "GLOBAL", "CRYPTO"):
             new_df = yf_src.fetch_daily_global(ticker)
@@ -99,7 +162,9 @@ def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
 def get_realtime(ticker: str) -> dict:
     market = market_of(ticker)
     try:
-        if market == "CN":
+        if market == "CN_INDEX":
+            r = ak_src.fetch_realtime_index(ticker)
+        elif market == "CN":
             r = ak_src.fetch_realtime_cn(ticker)
         else:
             r = yf_src.fetch_realtime_global(ticker)
@@ -128,6 +193,8 @@ def get_realtime(ticker: str) -> dict:
 
 def get_fundamentals(ticker: str) -> dict:
     market = market_of(ticker)
+    if market == "CN_INDEX":
+        return {"note": "指数无个股财报：应关注成分股构成、估值分位（PE/PB 历史百分位）与成交额"}
     if market == "CN":
         if is_cn_etf(ticker):
             return {"note": "场内基金/ETF：无传统个股财报指标，应关注跟踪指数、折溢价与成交额"}
@@ -142,7 +209,10 @@ def get_news(ticker: str, per_symbol_limit: int = 8) -> list[dict]:
     market = market_of(ticker)
     items: list[dict] = []
     try:
-        if market == "CN":
+        if market == "CN_INDEX":
+            # 指数无个股新闻：仅拉财联社宏观快讯（下方 macro 逻辑统一处理）
+            items = []
+        elif market == "CN":
             items = ak_src.fetch_news_cn(ticker, per_symbol_limit)
             try:
                 from core.data import tavily_news
@@ -157,7 +227,7 @@ def get_news(ticker: str, per_symbol_limit: int = 8) -> list[dict]:
     cache.upsert_news(items)
 
     macro: list[dict] = []
-    if market == "CN":
+    if market in ("CN", "CN_INDEX"):
         macro = news_sources.cls_global(limit=10)
         cache.upsert_news(macro)
     return items + macro

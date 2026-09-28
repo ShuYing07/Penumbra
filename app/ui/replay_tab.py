@@ -26,13 +26,15 @@ class _ReplayWorker(QThread):
 
     def __init__(self, ticker, start, end, step, engine_name):
         super().__init__()
-        self.ticker, self.start, self.end = ticker, start, end
+        self.ticker = ticker
+        # 不能叫 self.start，会遮蔽 QThread.start 方法
+        self.start_date, self.end_date = start, end
         self.step, self.engine_name = step, engine_name
 
     def run(self) -> None:
         try:
             bid = engine.run_replay(
-                self.ticker, start=self.start, end=self.end,
+                self.ticker, start=self.start_date, end=self.end_date,
                 step_bars=self.step, engine=self.engine_name,
                 progress_cb=lambda n, total, asof: self.progress.emit(n, total, asof))
             self.done.emit(bid)

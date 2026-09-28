@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shuying-api
+  labels:
+    app: shuying-api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: shuying-api
+  template:
+    metadata:
+      labels:
+        app: shuying-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.env.POSTGRES_USER }}:{{ .Values.env.POSTGRES_PASSWORD }}@shuying-postgres:5432/{{ .Values.env.POSTGRES_DB }}"
+            - name: REDIS_URL
+              value: "redis://shuying-redis:6379/0"
+            - name: JWT_SECRET
+              value: "{{ .Values.env.JWT_SECRET }}"
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
