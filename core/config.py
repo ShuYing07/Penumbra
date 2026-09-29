@@ -16,9 +16,20 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
-# 打包后（PyInstaller onedir）：数据目录放 exe 旁边（便携式，可整目录拷贝）
+# 打包后（PyInstaller onedir）：优先把数据目录放 exe 旁边（便携式，可整目录拷贝）；
+# 若 exe 目录不可写（如安装在 Program Files），自动回退到用户数据目录 %APPDATA%\ShuyingInsight。
 if getattr(sys, "frozen", False):
-    PROJECT_ROOT = Path(sys.executable).resolve().parent
+    _exe_root = Path(sys.executable).resolve().parent
+    _probe = _exe_root / "data"
+    try:
+        _probe.mkdir(parents=True, exist_ok=True)
+        _w = _probe / ".w"
+        _w.write_text("ok", encoding="utf-8")
+        _w.unlink()
+        PROJECT_ROOT = _exe_root
+    except OSError:
+        PROJECT_ROOT = (
+            Path(os.environ.get("APPDATA", str(Path.home()))) / "ShuyingInsight")
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

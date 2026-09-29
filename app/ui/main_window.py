@@ -504,7 +504,7 @@ class MainWindow(QMainWindow):
             log.debug("每日简报生成失败: %s", e)
 
     def _load_demo(self) -> None:
-        """首次启动自动加载贵州茅台（600519）示例数据（只加载K线，不跑LLM，避免启动慢）。"""
+        """首次启动自动加载示例股票 AAPL（苹果）示例数据（只加载K线，不跑LLM，避免启动慢）。"""
         from PyQt6.QtCore import QSettings
         settings = QSettings("Shuying", "ShuyingInsight")
         first = not settings.value("demo_loaded", False, type=bool)
@@ -512,8 +512,8 @@ class MainWindow(QMainWindow):
             return
         settings.setValue("demo_loaded", True)
         try:
-            self.chat_tab.input.setText("SH600519")
-            self.chart_tab.load("SH600519")
+            self.chat_tab.input.setText("AAPL")
+            self.chart_tab.load("AAPL")
         except Exception:
             pass
 

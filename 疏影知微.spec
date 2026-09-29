@@ -2,12 +2,12 @@
 from PyInstaller.utils.hooks import collect_all
 import os, glob
 
-# 只打包data里的json文件，不打包training/大模型
+# 只打包 data 里的静态索引 json（all_stocks.json / a_stocks.json）。
+# 严禁打包 data/*.db —— 它们是运行时生成的个人数据
+# （自选股/分析历史/模拟盘持仓/向量记忆/账号），随安装包分发会泄漏隐私。
 datas = [('assets', 'assets')]
 for jf in glob.glob('data/*.json'):
     datas.append((jf, 'data'))
-for db in glob.glob('data/*.db'):
-    datas.append((db, 'data'))
 # Web 混合模式静态页（FastAPI 需在打包后也能找到）
 datas.append(('web_ui/static', 'web_ui/static'))
 
