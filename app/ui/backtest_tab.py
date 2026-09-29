@@ -10,7 +10,8 @@ from PyQt6.QtCore import QThread, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDoubleSpinBox, QGridLayout, QGroupBox,
                              QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-                             QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                             QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget,
+                             QVBoxLayout, QWidget)
 
 from core.config import DATA_DIR, DISCLAIMER
 from core.data.service import get_daily, market_of
@@ -36,12 +37,19 @@ class _BacktestWorker(QThread):
 
     def run(self) -> None:
         try:
+            from core.quant.backtest import BacktestConfig
+            from core.quant.audit import run_audit
             df, status = get_daily(self.ticker)
             market = market_of(self.ticker)
             cfg = BacktestConfig(ticker=self.ticker, market=market,
                                  init_capital=self.capital, position_pct=self.position,
                                  start=self.start_date or None, end=self.end_date or None)
             res = run_backtest(df, market, self.strategy, self.params, cfg)
+            # 严谨性审计（前视偏差 + Walk-Forward；失败不影响主回测结果）
+            try:
+                res._audit = run_audit(df, market, self.strategy, self.params, cfg)
+            except Exception as e:  # noqa: BLE001
+                res._audit = {"error": f"{type(e).__name__}: {e}"}
             # 留痕：结果落 data/backtests/
             BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -157,12 +165,39 @@ class BacktestTab(QWidget):
         self.trade_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.trade_table.verticalHeader().setVisible(False)
 
+        # 结果页签：回测结果 / 策略审计
+        self.results_tabs = QTabWidget()
+        page_res = QWidget()
+        rv = QVBoxLayout(page_res)
+        rv.setContentsMargins(0, 4, 0, 0)
+        rv.addWidget(self.metric_table)
+        rv.addWidget(self.curve)
+        rv.addWidget(self.trade_table, 1)
+
+        page_audit = QWidget()
+        av = QVBoxLayout(page_audit)
+        av.setContentsMargins(0, 4, 0, 0)
+        self.audit_table = QTableWidget(0, 2)
+        self.audit_table.setHorizontalHeaderLabels(["审计项", "结果"])
+        self.audit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.audit_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.audit_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.audit_table.verticalHeader().setVisible(False)
+        self.audit_hint = QLabel(
+            "策略审计：① 前视偏差扫描——在信号产生时刻截断未来数据重算信号，"
+            "比对是否偏移（通过/可疑/未通过）；② Walk-Forward——样本内/样本外分段绩效，"
+            "识别过拟合。运行回测后自动生成。")
+        self.audit_hint.setWordWrap(True)
+        self.audit_hint.setStyleSheet("color:#8b949e;padding:2px 0")
+        av.addWidget(self.audit_hint)
+        av.addWidget(self.audit_table, 1)
+        self.results_tabs.addTab(page_res, "回测结果")
+        self.results_tabs.addTab(page_audit, "策略审计")
+
         v = QVBoxLayout(self)
         v.addLayout(bar)
         v.addLayout(params_row)
-        v.addWidget(self.metric_table)
-        v.addWidget(self.curve)
-        v.addWidget(self.trade_table, 1)
+        v.addWidget(self.results_tabs)
         v.addWidget(QLabel(DISCLAIMER))
         self._on_strategy_changed(0)
 
@@ -289,6 +324,55 @@ class BacktestTab(QWidget):
                 if c == 2:
                     item.setForeground(QColor("#c0392b" if val == "买入" else "#1e8449"))
                 self.trade_table.setItem(r, c, item)
+
+        # 策略审计
+        self._fill_audit(getattr(res, "_audit", None))
+
+    def _fill_audit(self, audit: dict | None) -> None:
+        rows: list[tuple[str, str]] = []
+        if not audit:
+            rows.append(("策略审计", "未生成（可重跑回测）"))
+        elif "error" in audit:
+            rows.append(("审计失败", audit["error"]))
+        else:
+            la = audit.get("lookahead") or {}
+            if la.get("verdict") == "na":
+                rows.append(("前视偏差扫描", f"不适用：{la.get('reason', '')}"))
+            elif la.get("verdict") == "error":
+                rows.append(("前视偏差扫描", f"失败：{la.get('reason', '')}"))
+            else:
+                verdict_map = {"pass": "✅ 通过", "suspect": "⚠️ 可疑", "fail": "❌ 未通过"}
+                rows.append(("前视偏差扫描",
+                             f"{verdict_map.get(la.get('verdict'), la.get('verdict'))} "
+                             f"（检查 {la.get('checked', 0)} 个信号点，偏移 {la.get('mismatches', 0)} 个）"))
+                if la.get("detail"):
+                    det = "; ".join(
+                        f"{d['date']}: 全量={d['sig_full']}→截断={d['sig_trunc']}"
+                        for d in la["detail"])
+                    rows.append(("偏移明细", det))
+            wf = audit.get("walk_forward") or {}
+            if "error" in wf:
+                rows.append(("Walk-Forward", wf["error"]))
+            else:
+                m_in, m_out, m_full = wf.get("in") or {}, wf.get("out") or {}, wf.get("full") or {}
+                rows.append(("切分点", f"{wf.get('split_date', '')}（样本内 {wf.get('in_bars', 0)} 根 / "
+                                       f"样本外 {wf.get('out_bars', 0)} 根）"))
+                rows.append(("样本内收益", f"{m_in.get('total_return_pct', '—')}% "
+                                        f"（回撤 {m_in.get('max_drawdown_pct', '—')}%，夏普 {m_in.get('sharpe', '—')}）"))
+                rows.append(("样本外收益", f"{m_out.get('total_return_pct', '—')}% "
+                                        f"（回撤 {m_out.get('max_drawdown_pct', '—')}%，夏普 {m_out.get('sharpe', '—')}）"))
+                rows.append(("全样本收益", f"{m_full.get('total_return_pct', '—')}% "
+                                        f"（回撤 {m_full.get('max_drawdown_pct', '—')}%，夏普 {m_full.get('sharpe', '—')}）"))
+                rows.append(("过拟合提示",
+                             "样本外收益显著低于样本内 → 警惕过拟合" if
+                             (m_out.get('total_return_pct') is not None and
+                              m_in.get('total_return_pct') is not None and
+                              float(m_out['total_return_pct']) < float(m_in['total_return_pct']) * 0.5)
+                             else "样本内外表现接近 → 稳健性较好"))
+        self.audit_table.setRowCount(len(rows))
+        for r, (k, v) in enumerate(rows):
+            self.audit_table.setItem(r, 0, QTableWidgetItem(k))
+            self.audit_table.setItem(r, 1, QTableWidgetItem(str(v)))
 
     def _run_factor_screen(self) -> None:
         """自动因子筛选：生成假设→统计验证→弹窗展示结果。"""

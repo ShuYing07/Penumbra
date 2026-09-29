@@ -206,10 +206,119 @@ class ChatTab(QWidget):
         self._analyze()
 
     # ---------- 分析 ----------
+    @staticmethod
+    def _is_pure_ticker(raw: str) -> bool:
+        """判断输入是否为纯股票代码（走原 K线+指标链路），否则交给 Agent。"""
+        import re
+        t = raw.strip().upper()
+        if not t:
+            return False
+        if t.isdigit() and len(t) == 6:
+            return True
+        if t.startswith(("SH", "SZ")) and len(t) == 8 and t[2:].isdigit():
+            return True
+        if t.endswith(".HK") and len(t) == 7 and t[:4].isdigit():
+            return True
+        # 字母代码：仅在股票索引中真实存在（如 AAPL）才视为代码，避免英文单词误判
+        if re.fullmatch(r"[A-Z]{1,5}", t):
+            try:
+                from agent.tool_defs import _stocks_index
+                for s in _stocks_index():
+                    if s["code"] == t:
+                        return True
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        return False
+
     def _analyze(self) -> None:
         raw = self.input.text().strip()
         if not raw:
             return
+        if self._is_pure_ticker(raw):
+            self._analyze_ticker(raw)
+        else:
+            self._ask_agent(raw)
+
+    def _ask_agent(self, raw: str) -> None:
+        """自然语言 → AgentCore 工具调用循环（后台线程，不阻塞 UI）。"""
+        self._say(f"<b>你：</b>{raw}")
+        self.input.setEnabled(False)
+        self.btn_search.setEnabled(False)
+        self.btn_share.setEnabled(False)
+        self._say(
+            "<div style='background:rgba(19,23,34,0.85);border:1px solid rgba(0,229,255,0.15);"
+            "border-radius:10px;padding:10px 14px;color:#8b949e;'>"
+            "🤖 <b>Agent 正在规划工具调用…</b><br/>"
+            "⏳ 解析意图 → 选择工具 → 顺序执行 → 合成回复</div>"
+        )
+        from PyQt6.QtCore import QThread, pyqtSignal as _pyqtSignal
+
+        class _AgentWorker(QThread):
+            done = _pyqtSignal(object)
+            fail = _pyqtSignal(str)
+
+            def run(self):
+                try:
+                    from agent.agent_core import AgentCore
+                    core = AgentCore()
+                    result = core.run(raw)
+                    self.done.emit(result)
+                except Exception as e:  # noqa: BLE001
+                    self.fail.emit(f"{type(e).__name__}: {e}")
+
+        self._aw = _AgentWorker()
+
+        def _on_agent_done(result: dict) -> None:
+            self.input.setEnabled(True)
+            self.btn_search.setEnabled(True)
+            self.btn_share.setEnabled(True)
+            plan = result.get("plan") or []
+            tools = " → ".join(p["tool"] for p in plan) or "（无工具调用）"
+            answer = result.get("answer") or ""
+            self._say(
+                f"<div style='color:#8b949e;font-size:12px'>🧰 工具链：{tools}</div>")
+            self._say(f"<div style='line-height:1.7'>{answer}</div>")
+            # 若提取到代码，联动右侧 K线
+            from agent.agent_core import extract_ticker
+            code = extract_ticker(raw)
+            if code and self._is_pure_ticker(code):
+                self._draw_for_code(code)
+
+        def _on_agent_fail(err: str) -> None:
+            self.input.setEnabled(True)
+            self.btn_search.setEnabled(True)
+            self.btn_share.setEnabled(True)
+            self._say(f"<span style='color:#FF1744'>Agent 调用失败：{err}</span>")
+
+        self._aw.done.connect(_on_agent_done)
+        self._aw.fail.connect(_on_agent_fail)
+        self._aw.start()
+
+    def _draw_for_code(self, code: str) -> None:
+        """自然语言识别出代码时，右侧渲染 K线（复用异步加载）。"""
+        from PyQt6.QtCore import QThread, pyqtSignal as _pyqtSignal
+
+        class _W(QThread):
+            done = _pyqtSignal(object, str, object)
+
+            def run(self):
+                try:
+                    df, source = service.get_daily(code)
+                    self.done.emit(code, source, df)
+                except Exception:  # noqa: BLE001
+                    self.done.emit(code, "", None)
+
+        w = _W()
+
+        def _ok(code_, source_, df_):
+            if df_ is not None and len(df_) > 30:
+                self._draw(df_)
+                self.right_title.setText(f"近期收盘价（{len(df_)}日）")
+        w.done.connect(_ok)
+        w.start()
+
+    def _analyze_ticker(self, raw: str) -> None:
         code = self._normalize(raw)
         self._say(f"<b>你：</b>{raw}")
         # 禁用输入，显示加载中

@@ -679,6 +679,12 @@ class MainWindow(QMainWindow):
                 _attr = {11: "history_tab", 5: "paper_tab", 12: "analysis_log_tab"}.get(idx)
                 if _attr:
                     setattr(self, _attr, tab)
+                if idx == 16:
+                    # 股票大全：双击/按钮 → 加入自选（与自选股页同样的处理）
+                    try:
+                        tab.add_watchlist.connect(self._on_watchlist_analyze)
+                    except Exception:  # noqa: BLE001
+                        pass
                 if idx == 10:
                     # 打开「学习库」时懒灌知识库（库为空才入库，后台线程）
                     self._prime_knowledge_base()

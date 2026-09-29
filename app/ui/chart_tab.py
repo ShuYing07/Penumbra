@@ -93,6 +93,10 @@ class ChartTab(QWidget):
         self._bars = None
         self._status_txt = ""
         self._ticker = ""
+        # 绘图状态
+        self._tool_mode: str | None = None
+        self._pending: list[dict] = []
+        self._drawing_items: list[tuple[list, int]] = []  # ([item], db_id)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -124,6 +128,30 @@ class ChartTab(QWidget):
                 "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}")
             rb.clicked.connect(lambda _=False, _n=n, _b=rb: self._set_range(_n, _b))
             top.addWidget(rb)
+        # 绘图工具栏（趋势线/水平线/斐波那契/矩形，参考 TradingView 简洁暗色）
+        top.addWidget(QLabel("绘图"))
+        self.tool_btns: dict[str, QPushButton] = {}
+        for key, label in (("trend", "↗ 趋势线"), ("hlevel", "— 水平线"),
+                           ("fib", "≋ 斐波那契"), ("rect", "▭ 矩形")):
+            tb = QPushButton(label)
+            tb.setCheckable(True)
+            tb.setToolTip({"trend": "点击两点画趋势线", "hlevel": "点击一点画水平线",
+                           "fib": "点击高/低两点画斐波那契回撤",
+                           "rect": "点击对角两点画矩形区间"}[key])
+            tb.setStyleSheet(
+                "QPushButton{padding:3px 8px;border-radius:8px;font-size:12px;}"
+                "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}"
+                "QPushButton:hover{border:1px solid rgba(0,229,255,0.4);}")
+            tb.clicked.connect(lambda _=False, k=key: self._toggle_tool(k))
+            top.addWidget(tb)
+            self.tool_btns[key] = tb
+        btn_undo = QPushButton("↶ 撤销")
+        btn_undo.setToolTip("删除最后一条标注")
+        btn_undo.clicked.connect(self._undo_drawing)
+        top.addWidget(btn_undo)
+        btn_clr = QPushButton("清空标注")
+        btn_clr.clicked.connect(self._clear_drawings)
+        top.addWidget(btn_clr)
         top.addStretch()
         self.status = QLabel("")
         top.addWidget(self.status)
@@ -142,6 +170,7 @@ class ChartTab(QWidget):
         self._tooltip = pg.TextItem(anchor=(0, 1), color="#eee", fill=pg.mkBrush(0,0,0,180))
         self.price.addItem(self._tooltip, ignoreBounds=True)
         self.price.scene().sigMouseMoved.connect(self._on_mouse)
+        self.price.scene().sigMouseClicked.connect(self._on_click)
         self.vol_axis = DateAxis(orientation="bottom")
         self.vol = pg.PlotWidget(axisItems={"bottom": self.vol_axis})
         self.vol.getPlotItem().setXLink(self.price.getPlotItem())
@@ -202,6 +231,169 @@ class ChartTab(QWidget):
         self._tooltip.setPos(x, y)
         self._tooltip.setVisible(True)
 
+    # ---------------- 绘图标注（趋势线/水平线/斐波那契/矩形） ----------------
+    def _toggle_tool(self, key: str) -> None:
+        """切换绘图工具（互斥选择）。"""
+        if self._tool_mode == key:
+            self._tool_mode = None
+            self._pending = []
+            self.tool_btns[key].setChecked(False)
+            self.status.setText("绘图已退出")
+            return
+        self._tool_mode = key
+        self._pending = []
+        for k, b in self.tool_btns.items():
+            b.setChecked(k == key)
+        self.status.setText(
+            {"trend": "趋势线：点击图上第 1 点", "hlevel": "水平线：点击图上 1 点",
+             "fib": "斐波那契：点击高点，再点击低点",
+             "rect": "矩形：点击左上角，再点击右下角"}[key])
+
+    def _on_click(self, event) -> None:
+        if not self._tool_mode or self._bars is None or len(self._bars) == 0:
+            return
+        vb = self.price.getPlotItem().getViewBox()
+        mousePoint = vb.mapSceneToView(event.scenePos())
+        x = int(round(mousePoint.x()))
+        view = self._bars.tail(self.win_box.value())
+        offset = len(self._bars) - len(view)
+        if not (0 <= x < len(view)):
+            self.status.setText("请在图表区域内点击")
+            return
+        y = round(float(mousePoint.y()), 2)
+        self._pending.append({"x": offset + x, "y": y})
+        need = {"trend": 2, "hlevel": 1, "fib": 2, "rect": 2}[self._tool_mode]
+        if len(self._pending) >= need:
+            self._finish_drawing()
+
+    def _finish_drawing(self) -> None:
+        mode = self._tool_mode
+        pts = list(self._pending)
+        self._pending = []
+        if mode == "hlevel":
+            data, meta = [{"x": pts[0]["x"], "y": pts[0]["y"]}], {}
+        elif mode == "trend":
+            data, meta = [{"x": pts[0]["x"], "y": pts[0]["y"]},
+                          {"x": pts[1]["x"], "y": pts[1]["y"]}], {}
+        elif mode == "fib":
+            a, b = (pts[0], pts[1]) if pts[0]["y"] >= pts[1]["y"] else (pts[1], pts[0])
+            data = [{"x": a["x"], "y": a["y"]}, {"x": b["x"], "y": b["y"]}]
+            meta = {"levels": [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]}
+        else:  # rect
+            data = [{"x": pts[0]["x"], "y": pts[0]["y"]},
+                    {"x": pts[1]["x"], "y": pts[1]["y"]}]
+            meta = {}
+        from core.drawings import save_drawing
+        db_id = save_drawing(self._ticker, mode, data, meta)
+        items = self._render_drawing(mode, data, meta)
+        self._drawing_items.append((items, db_id))
+        for it in items:
+            self.price.addItem(it, ignoreBounds=True)
+        self.status.setText(f"已保存「{mode}」标注（点击撤销可删除）")
+        self._toggle_tool(mode)  # 完成后自动退出工具模式
+
+    def _render_drawing(self, mode: str, data: list[dict], meta: dict) -> list:
+        """把全局索引坐标渲染为当前窗口内的绘图 item（越界整条跳过）。"""
+        if self._bars is None:
+            return []
+        view = self._bars.tail(self.win_box.value())
+        offset = len(self._bars) - len(view)
+        n = len(view)
+
+        def lx(gx: int) -> int:
+            return gx - offset
+
+        items: list = []
+        pen = pg.mkPen("#00E5FF", width=1.4)
+        if mode == "hlevel":
+            x0, y0 = lx(data[0]["x"]), data[0]["y"]
+            if not (0 <= x0 < n):
+                return []
+            line = pg.InfiniteLine(angle=0, pos=y0, pen=pen)
+            lbl = pg.TextItem(f"{y0:.2f}", anchor=(0, 1), color="#00E5FF")
+            lbl.setPos(x0, y0)
+            items += [line, lbl]
+        elif mode == "trend":
+            (x1, y1), (x2, y2) = (lx(data[0]["x"]), data[0]["y"]), (lx(data[1]["x"]), data[1]["y"])
+            if not (0 <= x1 < n and 0 <= x2 < n) or x1 == x2:
+                return []
+            import math
+            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+            line = pg.InfiniteLine(pos=(x1, y1), angle=angle, pen=pen)
+            items.append(line)
+        elif mode == "fib":
+            a, b = data[0], data[1]
+            xa, xb = lx(a["x"]), lx(b["x"])
+            if not (0 <= xa < n and 0 <= xb < n):
+                return []
+            levels = meta.get("levels") or [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+            hi, lo = max(a["y"], b["y"]), min(a["y"], b["y"])
+            for lv in levels:
+                y = lo + (hi - lo) * lv
+                ln = pg.InfiniteLine(angle=0, pos=y,
+                                     pen=pg.mkPen("#bb6bd9", width=1,
+                                                  style=Qt.PenStyle.DashLine))
+                lbl = pg.TextItem(f"{lv:.1%} {y:.2f}", anchor=(0, 1),
+                                  color="#bb6bd9", fill=pg.mkBrush(0, 0, 0, 160))
+                lbl.setPos(xb, y)
+                items += [ln, lbl]
+        elif mode == "rect":
+            (x1, y1), (x2, y2) = (lx(data[0]["x"]), data[0]["y"]), (lx(data[1]["x"]), data[1]["y"])
+            if not (0 <= x1 < n and 0 <= x2 < n):
+                return []
+            roi = pg.RectROI(pos=(min(x1, x2), min(y1, y2)),
+                             size=(abs(x2 - x1), abs(y2 - y1)),
+                             pen=pg.mkPen("#FFA726", width=1.4))
+            items.append(roi)
+        return items
+
+    def _restore_drawings(self) -> None:
+        """重绘所有已存标注（_redraw 的 clear() 后调用）。"""
+        # 先移除上一轮的渲染条目（可能已被 clear() 移除，忽略失败）
+        for items, _db in self._drawing_items:
+            for it in items:
+                try:
+                    self.price.removeItem(it)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._drawing_items = []
+        from core.drawings import list_drawings
+        if not self._ticker:
+            return
+        drawings = list_drawings(self._ticker)
+        for d in drawings:
+            items = self._render_drawing(d["type"], d["points"], d.get("meta") or {})
+            if items:
+                self._drawing_items.append((items, d["id"]))
+                for it in items:
+                    self.price.addItem(it, ignoreBounds=True)
+    def _undo_drawing(self) -> None:
+        if not self._drawing_items:
+            self.status.setText("没有可撤销的标注")
+            return
+        items, db_id = self._drawing_items.pop()
+        for it in items:
+            try:
+                self.price.removeItem(it)
+            except Exception:  # noqa: BLE001
+                pass
+        from core.drawings import delete_drawing
+        if db_id:
+            delete_drawing(db_id)
+        self.status.setText("已撤销最后一条标注")
+
+    def _clear_drawings(self) -> None:
+        from core.drawings import clear_ticker
+        cleared = clear_ticker(self._ticker) if self._ticker else 0
+        for items, _db in self._drawing_items:
+            for it in items:
+                try:
+                    self.price.removeItem(it)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._drawing_items = []
+        self.status.setText(f"已清空 {cleared} 条标注")
+
     # ---------------- 逻辑 ----------------
     def load(self, ticker: str | None = None) -> None:
         if ticker:
@@ -228,7 +420,7 @@ class ChartTab(QWidget):
     def _on_bars(self, bars, status: str) -> None:
         self._bars = bars
         self._status_txt = status
-        self._redraw()
+        self._redraw()  # 末尾已恢复十字光标与绘图标注
 
     @pyqtSlot(str)
     def _on_bad(self, msg: str) -> None:
@@ -273,3 +465,8 @@ class ChartTab(QWidget):
                             f"[{self._status_txt}] · 最新收盘 {c[-1]:.2f}")
         self.price.autoRange()
         self.vol.autoRange()
+        # clear() 会移除十字光标/悬停框，需重新挂载（修复重绘后光标丢失）
+        for it in (self._vline, self._hline, self._tooltip):
+            if it.scene() is None:
+                self.price.addItem(it, ignoreBounds=True)
+        self._restore_drawings()

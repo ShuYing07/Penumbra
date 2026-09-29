@@ -168,6 +168,21 @@ class WatchlistTab(QWidget):
             self.table.setItem(r, c, cell)
 
     # ---------------- 操作 ----------------
+    def add_external(self, ticker: str) -> bool:
+        """外部调用（股票大全/Agent 等）加入自选。返回是否新增成功。"""
+        from core.data.service import normalize_ticker
+        raw = ticker.strip().upper()
+        t = normalize_ticker(raw)
+        market = service.market_of(t)
+        if market == "UNKNOWN":
+            return False
+        if store.add(t, market, "", ""):
+            self._load_list()
+            if self._watching:
+                self.refresh()
+            return True
+        return False
+
     def _add(self) -> None:
         from core.data.service import normalize_ticker
         raw = self.in_ticker.text().strip().upper()
