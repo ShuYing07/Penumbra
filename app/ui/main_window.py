@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QLabel, QMainWindow, QStatusBar, QStyle, QSystemTra
                              QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QMessageBox, QTextEdit, QComboBox, QSplitter, QListWidget,
                              QListWidgetItem, QStackedWidget, QFrame, QSizePolicy,
-                             QDockWidget)
+                             QDockWidget, QMenu)
 
 from app.ui.analysis_tab import AnalysisTab
 from app.ui.analysis_log_tab import AnalysisLogTab
@@ -225,12 +225,22 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
 
         # 系统托盘（offscreen / 无桌面环境时不可用，跳过且不影响主流程）
+        # 提供右键菜单：显示主窗口 / 退出程序，确保用户可以真正退出，避免"以为退了实际还在托盘"
         self.tray: QSystemTrayIcon | None = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(
                 self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), self)
             self.tray.setToolTip("疏影 · 知微 盯盘")
             self.tray.messageClicked.connect(self.showNormal)
+            _tray_menu = QMenu(self)
+            _act_show = _tray_menu.addAction("显示主窗口")
+            _act_show.triggered.connect(self._show_from_tray)
+            _tray_menu.addSeparator()
+            _act_quit = _tray_menu.addAction("退出程序")
+            _act_quit.triggered.connect(self._quit_from_tray)
+            self.tray.setContextMenu(_tray_menu)
+            # 单击托盘图标恢复主窗口
+            self.tray.activated.connect(self._on_tray_activated)
             self.tray.show()
 
         # 联动：分析完成 → 刷新决策记录 / K线图自动载入 / 模拟盘刷新
@@ -385,6 +395,28 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         super().closeEvent(event)
+
+    # ---------- 托盘操作 ----------
+    def _show_from_tray(self) -> None:
+        """托盘菜单『显示主窗口』：恢复并置顶。"""
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        """托盘菜单『退出程序』：彻底退出（关闭窗口=退出，托盘不会残留）。"""
+        from PyQt6.QtWidgets import QApplication
+        QApplication.quit()
+
+    def _on_tray_activated(self, reason) -> None:
+        """单击/双击托盘图标 → 恢复主窗口。"""
+        try:
+            from PyQt6.QtWidgets import QSystemTrayIcon
+            if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                          QSystemTrayIcon.ActivationReason.DoubleClick):
+                self._show_from_tray()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---------- 模块二：主题切换 ----------
     def _toggle_theme(self) -> None:

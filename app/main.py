@@ -230,6 +230,28 @@ def _localping() -> int:
         return 1
 
 
+_SINGLE_INSTANCE_GUARD = None
+
+
+def _acquire_single_instance() -> bool:
+    """单实例锁（QSharedMemory）：只允许一个实例运行。
+
+    重复启动（双击两次、意外再次拉起等）时返回 False，由调用方提示后退出。
+    锁对象必须保持全局引用，否则被 GC 后锁会自动释放。
+    """
+    global _SINGLE_INSTANCE_GUARD
+    try:
+        from PyQt6.QtCore import QSharedMemory
+
+        mem = QSharedMemory("ShuyingInsight_SingleInstance_9f2c1a")
+        if not mem.create(1):  # 已存在同名段 → 说明已有实例
+            return False
+        _SINGLE_INSTANCE_GUARD = mem  # 持有引用，防止锁被释放
+        return True
+    except Exception:  # noqa: BLE001 - 锁失败不阻塞启动（罕见场景）
+        return True
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return _selftest()
@@ -244,9 +266,16 @@ def main() -> int:
     from core.config import setup_logging
 
     setup_logging()
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QMessageBox
     app = QApplication(sys.argv)
     app.setApplicationName("StockAIPredictor")
+    # 单实例锁：防止重复启动/多进程残留（即使意外被再次拉起，也只允许一个实例）
+    if not _acquire_single_instance():
+        QMessageBox.information(
+            None, "疏影 · 知微",
+            "程序已在运行中。\n\n请切换到已打开的窗口（或检查系统托盘图标），"
+            "不要重复启动。")
+        return 0
     # 应用级图标：任务栏/所有窗口统一 logo
     import os as _os
     from PyQt6.QtGui import QIcon as _QIcon
