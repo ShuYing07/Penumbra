@@ -437,6 +437,57 @@ def render_dcf_card(dcf: Dict[str, object]) -> str:
             + f"<p style='color:#FFA726;font-size:12px;'>{dcf.get('note','')}</p>")
 
 
+def build_report_card_html(ticker: str) -> str:
+    """财报摘要卡片聚合（0.8.0 UI 入口）：
+    财报摘要（业绩变动/合同/风险/管理层讨论）→ 多期对比 → 财务比率 → 5年DCF。
+    数据源不可达时逐段降级标注，不脑补。返回暗色主题 HTML。"""
+    from core.fundamental_analyzer import analyze_fundamentals, render_fundamental_card
+
+    parts: List[str] = []
+    reports = get_financial_reports(ticker, periods=4)
+    reps = reports.get("reports") or []
+    note = list(reports.get("note") or [])
+    fundamentals = reports.get("fundamentals") or {}
+
+    # 1) 关键信息提取（LLM → 规则兜底）
+    if reps:
+        latest = f"{reps[0].get('period','')}营收{reps[0].get('revenue','—')}、"
+        latest += f"净利润{reps[0].get('net_profit','—')}、毛利率{reps[0].get('gross_margin','—')}"
+        info = extract_key_info(latest, ticker)
+        parts.append(render_report_card(ticker, info, reports))
+        parts.append(render_period_compare(reps))
+    else:
+        note.append("财报接口不可达，跳过摘要与多期对比")
+
+    # 2) 财务比率（可得字段如实计算 + 缺失标注）
+    if reps:
+        parts.append(render_ratios_card(calculate_ratios(reps[0])))
+    else:
+        parts.append("<div style='color:#8B949E;'>财务比率：无报表数据</div>")
+
+    # 3) 5 年 DCF（基于可得字段；数据不足给中性演示标注）
+    f = {}
+    if reps:
+        f = {"revenue": reps[0].get("revenue"), "net_profit": reps[0].get("net_profit"),
+             "gross_margin": reps[0].get("gross_margin"),
+             "period": reps[0].get("period", "")}
+    parts.append(render_dcf_card(build_dcf_model(f)))
+
+    # 4) 基本面健康度卡片（估值/增速/评分/同行）
+    try:
+        ana = analyze_fundamentals(ticker)
+        parts.append(render_fundamental_card(ana))
+    except Exception as e:  # noqa: BLE001
+        note.append(f"基本面卡片失败({type(e).__name__})")
+
+    if note:
+        parts.insert(0, f"<div style='color:#FFA726;font-size:12px;'>"
+                    f"⚠️ {'；'.join(note)}</div>")
+    parts.append("<div style='color:#8B949E;font-size:12px;'>以上为客观数据展示，"
+                 "不构成投资建议。</div>")
+    return "<div style='line-height:1.6;'>" + "".join(parts) + "</div>"
+
+
 if __name__ == "__main__":
     info = extract_key_info("公司2026年半年度净利润同比增长15%，签订重大销售合同3亿元，"
                             "管理层讨论称海外业务拓展顺利。风险提示：行业竞争加剧。")

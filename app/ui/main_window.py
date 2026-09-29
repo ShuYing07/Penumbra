@@ -471,6 +471,7 @@ class MainWindow(QMainWindow):
         """启动后后台检查一次 GitHub Release；有新版本→状态栏提示（不自动下载）。"""
         from PyQt6.QtCore import QThread
         from PyQt6.QtCore import pyqtSignal
+        from config_manager import APP_VERSION as _VER
 
         class _Checker(QThread):
             found = pyqtSignal(object)
@@ -485,7 +486,7 @@ class MainWindow(QMainWindow):
         self._update_checker = _Checker()
         self._update_checker.found.connect(
             lambda res: self.statusBar().showMessage(
-                f"发现新版本 v{res['latest']}（当前 v{APP_VERSION}）· 可到 帮助→检查更新 查看"
+                f"发现新版本 v{res['latest']}（当前 v{_VER}）· 可到 帮助→检查更新 查看"
                 if res.get("has_update") else "", 12000))
         self._update_checker.start()
 

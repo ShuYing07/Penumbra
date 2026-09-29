@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""基本面分析标签页（模块九）：估值指标卡片 + 财务健康度评分 + 同行对比。"""
+"""基本面分析标签页（模块九）：估值指标卡片 + 财务健康度评分 + 同行对比。
+0.8.0 增强：财报摘要卡片（关键指标/多期对比）+ 财务比率 + 5 年 DCF 敏感性分析。"""
 from __future__ import annotations
 
 import logging
@@ -51,12 +52,12 @@ class FundamentalTab(QWidget):
 
             def run(self):
                 try:
-                    from core.fundamental_analyzer import analyze_fundamentals, render_fundamental_card
-                    ana = analyze_fundamentals(code)
-                    self.done.emit(render_fundamental_card(ana))
+                    from core.financial_report_parser import build_report_card_html
+                    self.done.emit(build_report_card_html(code))
                 except Exception as e:  # noqa: BLE001
                     self.done.emit(f"<span style='color:#FF1744'>分析失败：{e}</span>")
 
         w = _W()
         w.done.connect(lambda html: (self.out.setHtml(html), self.btn.setEnabled(True)))
         w.start()
+

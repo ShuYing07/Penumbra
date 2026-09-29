@@ -10,7 +10,7 @@ os.environ.setdefault("STOCKAI_MOCK", "1")
 from config_manager import APP_VERSION, REPO_API, REPO_URL, RELEASES_URL
 assert "StockAIPredictor" not in REPO_API and "StockAIPredictor" not in REPO_URL, (REPO_API, REPO_URL)
 assert "Penumbra" in REPO_API and "Penumbra" in REPO_URL and "Penumbra" in RELEASES_URL
-assert APP_VERSION == "0.7.0", APP_VERSION
+assert APP_VERSION == "0.8.0", APP_VERSION
 print("[ok] 仓库/版本常量:", APP_VERSION, REPO_URL)
 
 # 2) 异步更新检查：不阻塞主线程 + 回调触发（网络不可达时静默返回）
