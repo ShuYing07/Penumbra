@@ -123,3 +123,91 @@ def briefing_path(today: str | None = None) -> str:
     today = today or date.today().strftime("%Y-%m-%d")
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "data", "reports", f"daily_brief_{today}.md")
+
+
+# ---------------------------------------------------------------------------
+# 多渠道推送（参考 StocksBrew / Daily Stock Analysis 的多渠道设计）
+# 桌面通知由 main_window 托盘负责；这里实现飞书 Webhook 与邮件 SMTP，
+# 均只用标准库，配置读取 .env（未配置的渠道自动跳过）。
+# ---------------------------------------------------------------------------
+def _env(key: str, default: str = "") -> str:
+    import os as _os
+    return _os.environ.get(key, default).strip()
+
+
+def push_feishu(markdown: str) -> dict:
+    """推送到飞书群机器人 Webhook（POST 富文本消息）。"""
+    url = _env("FEISHU_WEBHOOK_URL")
+    if not url:
+        return {"channel": "feishu", "ok": False, "note": "未配置 FEISHU_WEBHOOK_URL"}
+    try:
+        import json
+        import urllib.request
+        payload = {
+            "msg_type": "post",
+            "content": {"post": {"title": "📰 疏影·知微 每日市场简报",
+                                 "content": [[{"tag": "text", "text": markdown[:4000]}]]}},
+        }
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return {"channel": "feishu", "ok": body.get("code") == 0,
+                "note": body.get("msg", "ok")}
+    except Exception as e:  # noqa: BLE001
+        return {"channel": "feishu", "ok": False, "note": f"推送失败：{e}"}
+
+
+def push_email(md_path: str, html: str) -> dict:
+    """通过 SMTP 发送简报邮件（.env: SMTP_HOST/PORT/USER/PASSWORD/TO）。"""
+    host = _env("SMTP_HOST")
+    if not host:
+        return {"channel": "email", "ok": False, "note": "未配置 SMTP_HOST"}
+    port = int(_env("SMTP_PORT", "465"))
+    user = _env("SMTP_USER")
+    pwd = _env("SMTP_PASSWORD")
+    to = _env("SMTP_TO")
+    if not (user and pwd and to):
+        return {"channel": "email", "ok": False, "note": "SMTP_USER/PASSWORD/TO 不完整"}
+    try:
+        import smtplib
+        from email.header import Header
+        from email.mime.text import MIMEText
+        from datetime import datetime as _dt
+        msg = MIMEText(f"简报文件见附件：{md_path}\n\n{html}", "plain", "utf-8")
+        msg["Subject"] = Header(f"疏影·知微 每日市场简报 {_dt.now():%Y-%m-%d}", "utf-8")
+        msg["From"] = user
+        msg["To"] = to
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=20)
+        else:
+            server = smtplib.SMTP(host, port, timeout=20)
+            server.starttls()
+        try:
+            server.login(user, pwd)
+            server.sendmail(user, [to], msg.as_string())
+        finally:
+            server.quit()
+        return {"channel": "email", "ok": True, "note": f"已发送至 {to}"}
+    except Exception as e:  # noqa: BLE001
+        return {"channel": "email", "ok": False, "note": f"发送失败：{e}"}
+
+
+def push_channels(md_path: str, html: str) -> list[dict]:
+    """按配置推送全部渠道（飞书 Webhook + 邮件），返回各渠道结果。"""
+    results = [push_feishu(html), push_email(md_path, html)]
+    for r in results:
+        if not r.get("ok"):
+            log.info("[推送] %s：%s", r["channel"], r.get("note", ""))
+    return results
+
+
+def configured_channels() -> list[str]:
+    """列出当前已配置的推送渠道（供设置面板展示）。"""
+    chs = []
+    if _env("FEISHU_WEBHOOK_URL"):
+        chs.append("飞书 Webhook")
+    if _env("SMTP_HOST") and _env("SMTP_TO"):
+        chs.append("邮件")
+    return chs

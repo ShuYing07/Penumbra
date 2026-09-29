@@ -6,7 +6,7 @@ import logging
 from functools import partial
 
 from core.agents import prompts as P
-from core.agents.schemas import AnalystSignal, Debate, RiskDecision, TraderPlan
+from core.agents.schemas import AnalystSignal, Debate, LeaderReport, RiskDecision, TraderPlan
 
 log = logging.getLogger("stockai.agents")
 
@@ -212,12 +212,67 @@ def risk_node(state, runner):
             "tokens": runner.usage()}
 
 
+def risk_assessor_node(state, runner):
+    """风险评估师（确定性）：波动率/VaR/最大回撤/压力测试，不依赖 LLM。"""
+    log.info("[节点] 风险评估师（确定性统计）")
+    try:
+        from core.agents.risk_assessor import assess_risk
+        from core.data import service
+        bars, _status = service.get_daily(state["ticker"])
+        if bars is None or len(bars) < 30:
+            raise ValueError(f"K线不足（{0 if bars is None else len(bars)} 根）")
+        result = assess_risk(bars)
+        state = {**state, "risk_assess": result}
+    except Exception as e:  # noqa: BLE001
+        log.warning("风险评估师降级: %s", str(e)[:120])
+        state = {**state, "risk_assess": {"risk_level": "不可用",
+                                          "note": f"计算失败：{type(e).__name__}"}}
+    return {"risk_assess": state["risk_assess"]}
+
+
+def leader_node(state, runner):
+    """首席分析师（Leader）：一致性审查 + 最终汇总。LLM 失败时程序层拼接降级。"""
+    log.info("[节点] 首席分析师（汇总终稿）")
+    risk_assess = state.get("risk_assess") or {}
+    signals = state.get("signals") or {}
+    bull = state.get("bull_case") or []
+    bear = state.get("bear_case") or []
+    final = state.get("final") or {}
+    user = (
+        f"{P.header(state)}\n"
+        f"四名专业分析师信号：\n{P.j(signals)}\n\n"
+        f"风险评估师（程序统计）：\n{P.j(risk_assess)}\n\n"
+        f"多头理由：{P.j(bull)}\n空头理由：{P.j(bear)}\n"
+        f"风控终审：{P.j(final)}\n\n"
+        "请输出 JSON：consensus(各信号一致性判断与分歧点)、final_view(120字内最终汇总观点)、"
+        "key_factors(3-6条关键影响因子)、disclaimers(1-3条提示)。"
+    )
+    rep = _run(runner, "leader", P.SYS_LEADER, user, LeaderReport)
+
+    # 程序层兜底：把汇总结果并入 final，供报告/证据链展示
+    fallback_view = (
+        f"{P.MARKET_NAME.get(state['market'], state['market'])} · "
+        f"{', '.join(s.get('stance', '') for s in signals.values() if isinstance(s, dict))}；"
+        f"风险评估={risk_assess.get('risk_level', '—')}"
+    )
+    merged_final = {**final,
+                    "leader": {
+                        "consensus": rep.consensus or "多信号并存（LLM一致性审查未返回）",
+                        "final_view": rep.final_view or fallback_view,
+                        "key_factors": rep.key_factors,
+                        "disclaimers": rep.disclaimers,
+                    }}
+    return {"final": merged_final}
+
+
 def bind(runner):
     """把 runner 注入所有节点，返回 (name, callable) 列表。"""
     pairs = [
         ("technical", technical_node), ("fundamental", fundamental_node),
         ("news", news_node), ("sentiment", sentiment_node),
+        ("risk_assessor", risk_assessor_node),
         ("bull", bull_node), ("bear", bear_node),
         ("trader", trader_node), ("risk", risk_node),
+        ("leader", leader_node),
     ]
     return [(name, partial(fn, runner=runner)) for name, fn in pairs]

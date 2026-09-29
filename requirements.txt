@@ -41,6 +41,7 @@ redis
 # chromadb==0.5.*             # 向量记忆（未装时自动降级 SQLite 哈希向量）
 # neo4j==5.*                  # 图记忆（未装时自动降级 SQLite 图存储）
 # rank_bm25==0.2.*            # BM25 关键词检索增强
+# skfolio                    # 组合优化高级引擎（均值-风险/风险平价/HRP/最大分散化/分布鲁棒CVaR；未装自动走 numpy/scipy 内置引擎）
 # pyiceberg                  # 湖仓时间旅行（data_pipeline/lakehouse，未装自动降级 SQLite 快照）
 # pyspark                    # 流式处理（data_pipeline/stream_processor，未装自动降级内置滑窗）
 # pyzmq                      # Sidecar 行情网关通道（未装自动降级内存队列）

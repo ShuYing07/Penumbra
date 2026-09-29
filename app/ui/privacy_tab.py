@@ -44,7 +44,7 @@ class PrivacyTab(QWidget):
 
         btn_delete_real = QPushButton("⚠️ 删除我的数据（执行）")
         btn_delete_real.setStyleSheet(
-            "background:#FF1744; color:white; border-radius:6px; padding:8px 14px;")
+            "background:#FFA726; color:#0A0C10; border-radius:6px; padding:8px 14px;")
         btn_delete_real.clicked.connect(self._delete_real)
         row.addWidget(btn_delete_real)
 

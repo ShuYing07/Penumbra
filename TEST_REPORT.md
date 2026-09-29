@@ -201,3 +201,69 @@ pip install redis celery                   # 任务队列/缓存（可选）
 - 记忆/图谱全部零依赖可降级：chromadb/neo4j 未装时自动走 SQLite 实现（接口不变，后续可平滑升级）；
 - Web UI 与 REST API 需 `pip install fastapi uvicorn[standard]` 后启用（桌面端未装时给出安装提示）；
 - 所有 AI/推理输出仍坚守"数据工具"定位，门控拒绝数据不足的结论（合规红线）。
+
+---
+
+## 十一、10 大方向优化（2026-09-29，回测严谨性 / Screener / 财报 / 组合优化 / 实时行情 / 性能打包 / 推理可观测 / 数据溯源 / 基本面引擎 / 多智能体团队）
+
+### 测试结果：**51/51 全部通过**（tests/run_all.py 一键运行）
+
+| # | 模块 | 关键文件 | 测试 |
+|---|---|---|---|
+| 1 | 回测严谨性 | core/quant/audit.py（前视偏差扫描 / Walk-Forward）+ 回测页"策略审计"tab | test_quant_audit.py PASS |
+| 2 | 结构化 Screener | core/screener.py（PE/PB/市值/量/换手等 9 条件 + 自然语言选股） | test_screener_nl.py PASS |
+| 3 | 财报与公告解析 | core/financial_report_parser.py（新浪/东财降级 + LLM/规则双通道 + 摘要卡片 + 多期对比） | test_finreport.py PASS |
+| 4 | 组合优化 | core/portfolio_optimizer.py（均值-方差/风险平价/HRP + 组合净值回测）+ UI tab 23 | test_portfolio_opt.py PASS |
+| 5 | 实时行情 | core/realtime_engine.py（轮询 + WebSocket + 退避重连 1→30s + 心跳）+ 自选股实时标签 | test_realtime.py PASS |
+| 6 | 性能与打包 | core/update_checker.py（启动后台检查，仅提示）、config_manager 版本 0.7.0 + 仓库统一、spec 瘦身 | test_update_checker.py PASS |
+| 7 | AI 推理可观测性 | agent/agent_events.py + agent_trace_store.py（agent_traces 落库）+ chat 时间线渲染 | test_agent_trace.py PASS |
+| 8 | 数据溯源与证据链 | core/evidence_manager.py（结论↔数据来源登记/查询/幂等）+ prompts 来源标注规则 | test_evidence.py PASS |
+| 9 | 基本面分析引擎 | core/fundamental_analyzer.py（健康度评分 + 估值卡片 + 同行对比）+ UI tab 24"基本面" | test_fundamental.py PASS |
+| 10 | 多智能体投研团队 | core/agents/risk_assessor.py（风险评估师：波动率/VaR/回撤/压力测试）+ leader_node（首席分析师一致性审查）+ 10 节点层级编排 | test_agents_team.py PASS |
+| — | UI 冒烟回归 | 25 tab 懒加载 + 导航全覆盖 + 跳页回归 | test_ui_smoke.py PASS |
+
+### 本轮修复的 Bug
+1. **懒加载跳页**（用户反馈"点开功能先弹出K线图"）：removeTab/insertTab 扰动 currentIndex → 恢复目标页；test_ui_smoke 逐页验证 25 tab 均保持目标页。
+2. **基本面 tab 无导航入口**：NAV_GROUPS"研究"组补入"📊 基本面（24）"。
+3. **风险评估师拿不到K线**：state 无 bars → 节点内改调 service.get_daily(ticker)（带缓存）。
+4. **证据链未覆盖新节点**：evidence_manager 补风险评估师/首席分析师登记。
+5. **测试非幂等**：test_evidence / test_agent_trace 历史残留导致偶发失败 → 清理逻辑 + 真实时间戳。
+
+### 说明
+- 东财概念接口本机不可达：UI 已有"查询失败可重试"降级，test_all 产业图谱子项按网络降级容忍计。
+- 组合优化 skfolio 未安装时自动走 numpy/scipy 引擎并标注；安装 `pip install skfolio` 后自动切换。
+- fastmcp 4.0.10 / pypinyin 0.55.0 已按用户要求安装完成。
+- 未打包、未推送、未打标签（等用户通知后再开源更新）。
+
+---
+
+## 十二、任务书A+B（2026-09-29，实时行情QOS / 数据质量校验 / 性能监控 / 7分析师团队 / PIT-Guard / 组合优化扩展 / 财务比率+DCF / 执行控制台）
+
+### 测试结果：**58/58 全部通过**（tests/run_all.py 一键运行）
+
+| # | 模块 | 关键文件 | 测试 |
+|---|---|---|---|
+| 1 | 实时行情（QOS 优先） | core/realtime_engine.py 新增 `_ws_url()`：QOS_WS_URL → REALTIME_WS_URL → Longbridge 三级优先；心跳 30s + 退避重连 1→30s | test_realtime.py PASS |
+| 2 | 数据质量校验 | core/data_quality.py（OHLCV 缺失/非正价/>50%跳变/交易日缺口，score 0-100 扣分制，及格 70；财报字段+数值+多期一致性；quality_reports 落库）+ service.get_daily 集成校验与备源切换 + UI tab 25"数据质量" | test_data_quality.py PASS |
+| 3 | 性能监控 | core/performance_monitor.py（模块计时/API 计数/内存采样/异常阈值）+ UI tab 26"系统健康"（5s 自刷新）+ main_window 启动计时 | test_perf_monitor.py PASS |
+| 4 | 7 分析师并行团队 | core/agents/analyst_team.py（ANALYST_DEFS：技术/基本面/新闻/情绪=数据组并行，宏观/风险/深度研究=综合组并行；ThreadPoolExecutor；InvestmentManager 组合经理：风控否决权+批准限额）+ run_analysis_team 全流程 + analysis_context 落盘 | test_analyst_team.py PASS |
+| 5 | PIT-Guard 数据泄漏防护 | core/pit_guard.py（guard_bars 时点截断 / guard_data 未来记录剔除 / leakage_probe 参数化记忆探测 / annotate_report 机械层-Agent层边界）+ config.yaml collaboration.mode（panel/debate/vote 可插拔） | test_pit_guard.py PASS |
+| 6 | 组合优化扩展 | core/portfolio_optimizer.py 新增 maxdiv（最大分散化 SLSQP）与 cvar（分布鲁棒 CVaR）；UI tab 23 下拉同步 | test_portfolio_opt2.py PASS |
+| 7 | 财务比率 + DCF | core/financial_report_parser.py 新增 calculate_ratios（可得字段如实计算/缺失标注）、build_dcf_model（5 年折现 + 三情景 + 3×3 敏感性 + 免责声明）、render_ratios_card/render_dcf_card | test_ratios_dcf.py PASS |
+| 8 | 执行控制台 | agent/execution_console.py（User/Expert/Dev 三模式渲染；Dev 含 token_ledger 统计 + agent_traces 分组瀑布） | test_execution_console.py PASS |
+| — | UI 冒烟回归 | 27 tab 懒加载 + 导航全覆盖（含 tab 25/26） | test_ui_smoke.py PASS |
+
+### 本轮修复的 Bug
+1. **execution_console.render 缺 analysis_id 参数**：Dev 模式无法传入分析ID → 签名补 `analysis_id=None`。
+2. **performance_monitor.timed 的 _Ctx 引用错误**：`self._lock` 不在 _Ctx 上 → 闭包捕获 monitor 的锁与模块表。
+3. **pit_guard.guard_data 日期比较 bug**：as_of 带连字符未规范化，与纯数字日期串比较恒 False → 未来记录全部误剔 → `_norm_date(as_of)` 统一口径。
+4. **analyst_team 全流程覆盖 state**：`state = nodes.leader_node(...)` 丢弃其余字段 → 改 `state.update(...)`。
+5. **test_ui_smoke 未同步 27 tab**：25→27、range(5,27)、新增 tab 25/26 实例化断言。
+6. 新测试首跑暴露 4 处断言设计问题（分数及格线语义、浮点 round、state 字段缺失、dataclass 参数）——均已修正为与实现语义一致。
+
+### 说明
+- 东财接口本机仍不可达：数据质量/备源链自动降级并如实标注来源；run_all 对网络降级容忍。
+- QOS 行情 API 需用户自行申请 token（.env `QOS_API_TOKEN`）；未配置时自动走 AKShare 轮询降级。
+- skfolio / fastapi / uvicorn 仍未安装（可选，未安装不影响桌面版）；安装命令见 requirements.txt 注释。
+- 所有 AI 推理出口仍坚守"数据工具"定位：PIT-Guard 保证回测无前视、机械层收益不含 LLM、DCF 明确"不构成投资建议"。
+- 未打包、未推送、未打标签（等用户通知后再开源更新）。

@@ -97,7 +97,12 @@ class ChartTab(QWidget):
         self._tool_mode: str | None = None
         self._pending: list[dict] = []
         self._drawing_items: list[tuple[list, int]] = []  # ([item], db_id)
+        self._favs: set = set()
         self._build_ui()
+        # 右键样式面板：点击图表空白处调整最近一条标注
+        self.price.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self.price.customContextMenuRequested.connect(self._on_plot_right_click)
 
     def _build_ui(self) -> None:
         top = QHBoxLayout()
@@ -128,23 +133,41 @@ class ChartTab(QWidget):
                 "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}")
             rb.clicked.connect(lambda _=False, _n=n, _b=rb: self._set_range(_n, _b))
             top.addWidget(rb)
-        # 绘图工具栏（趋势线/水平线/斐波那契/矩形，参考 TradingView 简洁暗色）
+        # 绘图工具栏（趋势线/水平线/斐波那契/矩形/橡皮擦，参考 TradingView）
         top.addWidget(QLabel("绘图"))
         self.tool_btns: dict[str, QPushButton] = {}
         for key, label in (("trend", "↗ 趋势线"), ("hlevel", "— 水平线"),
                            ("fib", "≋ 斐波那契"), ("rect", "▭ 矩形")):
             tb = QPushButton(label)
             tb.setCheckable(True)
-            tb.setToolTip({"trend": "点击两点画趋势线", "hlevel": "点击一点画水平线",
-                           "fib": "点击高/低两点画斐波那契回撤",
-                           "rect": "点击对角两点画矩形区间"}[key])
+            tb.setToolTip({"trend": "点击两点画趋势线（右键收藏）",
+                           "hlevel": "点击一点画水平线（右键收藏）",
+                           "fib": "点击高/低两点画斐波那契回撤（右键收藏）",
+                           "rect": "点击对角两点画矩形区间（右键收藏）"}[key])
             tb.setStyleSheet(
                 "QPushButton{padding:3px 8px;border-radius:8px;font-size:12px;}"
                 "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}"
                 "QPushButton:hover{border:1px solid rgba(0,229,255,0.4);}")
             tb.clicked.connect(lambda _=False, k=key: self._toggle_tool(k))
+            tb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            tb.customContextMenuRequested.connect(
+                lambda _pos, k=key, b=tb: self._toggle_fav(k, b))
             top.addWidget(tb)
             self.tool_btns[key] = tb
+        self._load_favs()
+        btn_eraser = QPushButton("⌫ 删除标注")
+        btn_eraser.setCheckable(True)
+        btn_eraser.setToolTip("进入删除模式：点击图表任意处删除最近一条标注")
+        btn_eraser.setStyleSheet(
+            "QPushButton{padding:3px 8px;border-radius:8px;font-size:12px;color:#FFA726;}"
+            "QPushButton:checked{background:rgba(255,167,38,0.18);}")
+        btn_eraser.clicked.connect(self._toggle_eraser)
+        top.addWidget(btn_eraser)
+        self.eraser_btn = btn_eraser
+        self.snap_box = QCheckBox("磁吸")
+        self.snap_box.setToolTip("绘图时自动吸附到最近 K 线的高低点（参考 TradingView 磁吸）")
+        self.snap_box.setChecked(True)
+        top.addWidget(self.snap_box)
         btn_undo = QPushButton("↶ 撤销")
         btn_undo.setToolTip("删除最后一条标注")
         btn_undo.clicked.connect(self._undo_drawing)
@@ -250,7 +273,12 @@ class ChartTab(QWidget):
              "rect": "矩形：点击左上角，再点击右下角"}[key])
 
     def _on_click(self, event) -> None:
-        if not self._tool_mode or self._bars is None or len(self._bars) == 0:
+        if self._bars is None or len(self._bars) == 0:
+            return
+        if self._tool_mode == "eraser":
+            self._erase_last()
+            return
+        if not self._tool_mode:
             return
         vb = self.price.getPlotItem().getViewBox()
         mousePoint = vb.mapSceneToView(event.scenePos())
@@ -261,6 +289,17 @@ class ChartTab(QWidget):
             self.status.setText("请在图表区域内点击")
             return
         y = round(float(mousePoint.y()), 2)
+        # 磁吸：吸附到该根 K 线的高低点（更接近者）
+        if self.snap_box.isChecked():
+            try:
+                row = view.iloc[x]
+                hi, lo = float(row["high"]), float(row["low"])
+                if abs(y - hi) <= abs(y - lo):
+                    y = round(hi, 2)
+                else:
+                    y = round(lo, 2)
+            except Exception:  # noqa: BLE001
+                pass
         self._pending.append({"x": offset + x, "y": y})
         need = {"trend": 2, "hlevel": 1, "fib": 2, "rect": 2}[self._tool_mode]
         if len(self._pending) >= need:
@@ -304,7 +343,8 @@ class ChartTab(QWidget):
             return gx - offset
 
         items: list = []
-        pen = pg.mkPen("#00E5FF", width=1.4)
+        color = (meta or {}).get("color", "#00E5FF")
+        pen = pg.mkPen(color, width=1.4)
         if mode == "hlevel":
             x0, y0 = lx(data[0]["x"]), data[0]["y"]
             if not (0 <= x0 < n):
@@ -367,6 +407,106 @@ class ChartTab(QWidget):
                 self._drawing_items.append((items, d["id"]))
                 for it in items:
                     self.price.addItem(it, ignoreBounds=True)
+    # ---------------- 绘图深化：收藏 / 橡皮擦 / 右键样式 ----------------
+    def _load_favs(self) -> None:
+        from PyQt6.QtCore import QSettings
+        favs = QSettings("Shuying", "ShuyingInsight").value(
+            "draw_favs", ["trend", "hlevel", "fib"])
+        if not isinstance(favs, list):
+            favs = ["trend", "hlevel", "fib"]
+        self._favs: set = set(favs)
+        for k, b in self.tool_btns.items():
+            star = "⭐ " if k in self._favs else ""
+            b.setText(f"{star}" + {"trend": "↗ 趋势线", "hlevel": "— 水平线",
+                                    "fib": "≋ 斐波那契", "rect": "▭ 矩形"}[k])
+            b.setToolTip(("⭐ 已收藏，右键取消收藏；" if k in self._favs else "右键收藏；")
+                         + b.toolTip())
+
+    def _toggle_fav(self, key: str, btn) -> None:
+        from PyQt6.QtCore import QSettings
+        if key in self._favs:
+            self._favs.discard(key)
+        else:
+            self._favs.add(key)
+        QSettings("Shuying", "ShuyingInsight").setValue("draw_favs", sorted(self._favs))
+        self._load_favs()
+        self.status.setText(f"{'已收藏' if key in self._favs else '已取消收藏'}「{key}」工具")
+
+    def _toggle_eraser(self) -> None:
+        if self._tool_mode == "eraser":
+            self._tool_mode = None
+            self.eraser_btn.setChecked(False)
+            self.status.setText("删除模式已退出")
+            return
+        self._tool_mode = "eraser"
+        for k, b in self.tool_btns.items():
+            b.setChecked(False)
+        self.eraser_btn.setChecked(True)
+        self.status.setText("删除模式：点击图表任意处删除最近一条标注（Esc 退出）")
+
+    def _erase_last(self) -> None:
+        if not self._drawing_items:
+            self.status.setText("没有可删除的标注")
+            return
+        items, db_id = self._drawing_items.pop()
+        try:
+            from core.drawings import delete_drawing
+            delete_drawing(db_id)
+        except Exception:  # noqa: BLE001
+            pass
+        for it in items:
+            try:
+                self.price.removeItem(it)
+            except Exception:  # noqa: BLE001
+                pass
+        self.status.setText(f"已删除 1 条标注（剩余 {len(self._drawing_items)} 条）")
+
+    def _on_plot_right_click(self, pos) -> None:
+        """右键样式面板：调整最近一条标注颜色 / 删除（参考 TradingView）。"""
+        if not self._drawing_items:
+            self.status.setText("暂无标注可设置样式")
+            return
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        for name, col in (("青色", "#00E5FF"), ("紫色", "#bb6bd9"),
+                          ("橙色", "#FFA726"), ("白色", "#E6EDF3")):
+            act = menu.addAction(f"最近一条 → {name}")
+            act.triggered.connect(
+                lambda _=False, c=col, n=name: self._recolor_last(c, n))
+        menu.addSeparator()
+        act_del = menu.addAction("删除最近一条")
+        act_del.triggered.connect(lambda: self._erase_last())
+        menu.exec(self.price.mapToGlobal(pos))
+
+    def _recolor_last(self, color: str, name: str) -> None:
+        items, db_id = self._drawing_items[-1]
+        # 更新数据库 meta.color 并重渲染该条标注
+        try:
+            from core.drawings import update_drawing_meta
+            update_drawing_meta(db_id, {"color": color})
+        except Exception:  # noqa: BLE001
+            pass
+        for it in items:
+            try:
+                self.price.removeItem(it)
+            except Exception:  # noqa: BLE001
+                pass
+        mode = self._ticker and "hlevel"  # 从最近保存数据重渲染
+        try:
+            from core.drawings import list_drawings
+            drawings = list_drawings(self._ticker)
+            for d in drawings:
+                if d["id"] == db_id:
+                    new_items = self._render_drawing(d["type"], d["points"],
+                                                     {**(d.get("meta") or {}), "color": color})
+                    for it in new_items:
+                        self.price.addItem(it, ignoreBounds=True)
+                    self._drawing_items[-1] = (new_items, db_id)
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+        self.status.setText(f"最近一条标注已改为「{name}」")
+
     def _undo_drawing(self) -> None:
         if not self._drawing_items:
             self.status.setText("没有可撤销的标注")

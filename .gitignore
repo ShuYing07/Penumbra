@@ -50,3 +50,6 @@ _dbg*.py
 _dbg_out.txt
 _final_smoke.py
 _st*.txt
+
+# 发布资产（zip 走 GitHub Release，不进仓库）
+*.zip

@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import threading
+import time
 from typing import Any, Dict, List
 
 from agent.schemas import ToolResult
@@ -83,6 +84,13 @@ class AgentCore:
         if mock is None:
             mock = _is_mock_env()
         self.mock = mock
+        # 模块七：推理事件流（可观测性）
+        from agent.agent_events import EventCollector
+        self.events = EventCollector()
+
+    def set_event_callback(self, cb) -> None:
+        """注册事件回调（如 PyQt 信号桥），实时推送 THINKING/TOOL_CALL/…。"""
+        self.events.set_callback(cb)
 
     # ---------------- 意图解析 ----------------
     def plan(self, text: str) -> List[Dict[str, Any]]:
@@ -178,14 +186,34 @@ class AgentCore:
         out = self.llm.chat_json(node="agent", system="", user=prompt, raw=True)
         return out if isinstance(out, str) else str(out)
 
-    def run(self, user_input: str) -> Dict[str, Any]:
-        """完整循环：计划 → 顺序执行 → 注入结果 → 生成回复 → 合规过滤 → 记录。"""
+    def run(self, user_input: str,
+            context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        """完整循环：计划 → 顺序执行 → 注入结果 → 生成回复 → 合规过滤 → 记录。
+
+        context 可选：{page, stock, skill, history}，按优先级注入 LLM Prompt。
+        返回含 events（推理轨迹，模块七可观测性）。
+        """
+        from agent.agent_events import EventType
         plan = self.plan(user_input)
+        self.events.emit(EventType.THINKING,
+                         f"解析意图完成：共 {len(plan)} 步工具链"
+                         + (f"（{ ' → '.join(s['tool'] for s in plan) }）" if plan else ""))
         results: List[Dict[str, Any]] = []
         for step in plan:
+            self.events.emit(EventType.TOOL_CALL,
+                             f"调用 {step['tool']}",
+                             tool=step["tool"], kwargs=step.get("kwargs") or {})
             res = call_tool(step["tool"], dict(step.get("kwargs") or {}))
-            results.append({"tool": step["tool"], "result": res.model_dump()})
-        answer = self._compose(user_input, plan, results)
+            d = res.model_dump()
+            ok = d.get("ok")
+            note = d.get("note", "")
+            self.events.emit(EventType.TOOL_RESULT,
+                             f"{step['tool']} → {'成功' if ok else '失败'} "
+                             + (f"（{note[:80]}）" if note else ""),
+                             ok=ok, tool=step["tool"])
+            results.append({"tool": step["tool"], "result": d})
+        self.events.emit(EventType.REASONING, "基于工具结果组织最终回复")
+        answer = self._compose(user_input, plan, results, context)
         # 合规过滤（命中红线 → 追加免责标注）
         violations = self.rules.check({"text": answer})
         compliance = {
@@ -194,17 +222,44 @@ class AgentCore:
         }
         if compliance["blocked"]:
             answer += "\n\n⚠️ 检测到敏感话术，已按合规规则标注，输出仅供参考，不构成投资建议。"
+        self.events.emit(EventType.FINAL_REPORT, "报告已生成", blocked=compliance["blocked"])
         # 记录到决策日志
         self._log_decision(user_input, plan, results, answer, compliance)
+        # 模块七：推理轨迹持久化（可解释性账本）
+        try:
+            from agent.agent_trace_store import save_trace
+            import hashlib
+            aid = hashlib.md5(f"{user_input}|{time.time()}".encode()).hexdigest()[:16]
+            save_trace(aid, self.events.snapshot())
+        except Exception as e:  # noqa: BLE001
+            log.debug("trace 持久化失败：%s", e)
+        # 模块八：数据溯源（工具结果快照登记为证据）
+        try:
+            import uuid
+            from core.evidence_manager import save_report_evidence
+            _aid = f"agent|{uuid.uuid4().hex[:12]}"
+            save_report_evidence(_aid, {
+                "ticker": extract_ticker(user_input) or "—",
+                "quote": next((r["result"].get("data") or {} for r in results
+                               if r["tool"] == "fetch_stock_data"), {}),
+                "signals": {},
+                "bull_case": [], "bear_case": [],
+                "trader": {}, "risk": {},
+                "final": {"action": "分析完成", "summary": answer[:300]},
+            })
+        except Exception as e:  # noqa: BLE001
+            log.debug("证据链登记失败：%s", e)
         return {
             "plan": [{"tool": s["tool"], "kwargs": s["kwargs"]} for s in plan],
             "results": results,
             "answer": answer,
             "compliance": compliance,
+            "events": self.events.snapshot(),
         }
 
     # ---------------- 回复合成 ----------------
-    def _compose(self, user_input: str, plan, results) -> str:
+    def _compose(self, user_input: str, plan, results,
+                 context: Dict[str, Any] | None = None) -> str:
         if not plan:
             return ("我暂时没理解你的意图。可以试试：\n"
                     "· 「分析 600519」→ 行情+指标报告\n"
@@ -213,7 +268,7 @@ class AgentCore:
                     "· 「搜索 银行股」→ 股票检索\n"
                     "· 「今日市场概览」→ 大盘速览")
         if not self.mock and self.llm is not None:
-            return self._llm_compose(user_input, results)
+            return self._llm_compose(user_input, results, context)
         return self._mock_compose(user_input, results)
 
     def _mock_compose(self, user_input: str, results) -> str:
@@ -272,15 +327,27 @@ class AgentCore:
         lines.append("<br/>以上均为客观数据展示，不构成投资建议。")
         return "<br/>".join(lines)
 
-    def _llm_compose(self, user_input: str, results) -> str:
+    def _llm_compose(self, user_input: str, results,
+                     context: Dict[str, Any] | None = None) -> str:
         try:
+            from skill_loader import skills_prompt
+            from context_manager import build_context_block
             payload = json.dumps(
                 [{"tool": r["tool"], "result": r["result"]} for r in results],
                 ensure_ascii=False, default=str)
+            skill = skills_prompt(user_input)
+            ctx = build_context_block(
+                user_input,
+                page=(context or {}).get("page"),
+                stock=(context or {}).get("stock"),
+                skill=(context or {}).get("skill"),
+                history=(context or {}).get("history"))
             prompt = (
-                f"你是疏影·知微的AI研究助手。用户说：{user_input}\n\n"
+                f"你是疏影·知微的AI研究助手。{skill}\n\n"
+                f"用户说：{user_input}\n\n"
+                f"{ctx}\n\n"
                 f"工具执行结果如下：\n{payload}\n\n"
-                f"请用简洁中文总结（3-6条要点），只陈述客观数据，"
+                f"请按技能指令与简洁中文组织回答（3-6条要点），只陈述客观数据，"
                 f"不得给出买入/卖出/目标价等投资建议。")
             return self._chat_text(prompt)
         except Exception as e:  # noqa: BLE001

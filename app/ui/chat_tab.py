@@ -46,7 +46,16 @@ class ChatTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 上下文感知（由主窗口 set_context 注入：当前页面 + 当前股票）
+        self._ctx_page = "对话分析"
+        self._ctx_stock = ""
         self._build()
+
+    def set_context(self, page: str, stock: str = "") -> None:
+        """外部（主窗口浮动 AI）注入上下文：页面 + 当前选中股票。"""
+        self._ctx_page = page or "对话分析"
+        self._ctx_stock = stock or ""
+        self.setToolTip(f"上下文：{self._ctx_page}｜股票：{self._ctx_stock or '未选中'}")
 
     # ---------- UI ----------
     def _build(self) -> None:
@@ -257,17 +266,45 @@ class ChatTab(QWidget):
         class _AgentWorker(QThread):
             done = _pyqtSignal(object)
             fail = _pyqtSignal(str)
+            event = _pyqtSignal(object)   # 模块七：推理事件实时推送
 
             def run(self):
                 try:
                     from agent.agent_core import AgentCore
                     core = AgentCore()
-                    result = core.run(raw)
+                    # 模块七：事件桥（后台线程 → 信号 → UI 时间线）
+                    def _bridge(ev):
+                        self.event.emit(ev)
+                    core.set_event_callback(_bridge)
+                    # 注入上下文：页面 + 当前股票 + @显式引用
+                    ctx = {
+                        "page": self._ctx_page,
+                        "stock": self._ctx_stock or "",
+                        "history": self._recent_history(),
+                    }
+                    result = core.run(raw, context=ctx)
                     self.done.emit(result)
                 except Exception as e:  # noqa: BLE001
                     self.fail.emit(f"{type(e).__name__}: {e}")
 
         self._aw = _AgentWorker()
+
+        def _on_agent_event(ev) -> None:
+            """把推理轨迹渲染为对话内时间线（非阻塞，实时可见）。"""
+            try:
+                from agent.agent_events import event_label
+                icon = {"thinking": "🧠", "tool_call": "🔧", "tool_result": "📥",
+                        "reasoning": "⚙️", "final_report": "📄"}.get(
+                    ev.event_type.value, "•")
+                color = {"thinking": "#00B4D8", "tool_call": "#FFA726",
+                         "tool_result": "#8B949E", "reasoning": "#00B4D8",
+                         "final_report": "#00C853"}.get(ev.event_type.value, "#DCE1EB")
+                self._say(
+                    f"<div style='color:{color};font-size:12px;padding:1px 0;'>"
+                    f"{icon} <b>{event_label(ev.event_type)}</b> "
+                    f"<span style='color:#8b949e'>{ev.content}</span></div>")
+            except Exception:  # noqa: BLE001
+                pass
 
         def _on_agent_done(result: dict) -> None:
             self.input.setEnabled(True)
@@ -289,11 +326,28 @@ class ChatTab(QWidget):
             self.input.setEnabled(True)
             self.btn_search.setEnabled(True)
             self.btn_share.setEnabled(True)
-            self._say(f"<span style='color:#FF1744'>Agent 调用失败：{err}</span>")
+            self._say(f"<span style='color:#FFA726'>Agent 调用失败：{err}</span>")
 
         self._aw.done.connect(_on_agent_done)
         self._aw.fail.connect(_on_agent_fail)
+        self._aw.event.connect(_on_agent_event)
         self._aw.start()
+
+    def _recent_history(self) -> list:
+        """最近 6 轮对话记录（供上下文优先级使用）。"""
+        import re
+        out = []
+        txt = self.chat.toPlainText()
+        # 简单切分 "你：" / "AI：" 段落，保留末尾最近几条
+        for seg in re.split(r"\n(?=你：|AI：)", txt):
+            seg = seg.strip()
+            if not seg:
+                continue
+            if seg.startswith("你："):
+                out.append({"role": "user", "content": seg[2:][:120]})
+            elif seg.startswith("AI："):
+                out.append({"role": "assistant", "content": seg[3:][:120]})
+        return out[-6:]
 
     def _draw_for_code(self, code: str) -> None:
         """自然语言识别出代码时，右侧渲染 K线（复用异步加载）。"""
@@ -372,8 +426,8 @@ class ChatTab(QWidget):
                     "✅ ④ 生成报告</div>")
             else:
                 cur.insertHtml(
-                    "<div style='background:rgba(255,23,68,0.12);border:1px solid #FF1744;"
-                    "border-radius:10px;padding:10px 14px;color:#FF1744;'>"
+                    "<div style='background:rgba(255,167,38,0.10);border:1px solid #FFA726;"
+                    "border-radius:10px;padding:10px 14px;color:#FFA726;'>"
                     "❌ 数据获取失败，已停止执行。</div>")
         except Exception:  # noqa: BLE001
             pass
@@ -408,14 +462,14 @@ class ChatTab(QWidget):
         except Exception:
             pass
         # 模块四：保存提示
-        self._say("<span style='color:#00C853'>✅ 本轮分析已保存到本地知识库（可随时回看）。</span>")
+        self._say("<span style='color:#00E5FF'>✅ 本轮分析已保存到本地知识库（可随时回看）。</span>")
 
     def _on_data_fail(self, err: str) -> None:
         self.input.setEnabled(True)
         self.btn_search.setEnabled(True)
         self.btn_share.setEnabled(True)
         self._timeline_done(False)
-        self._say(f"<span style='color:#FF1744'>获取数据失败：{err}</span>")
+        self._say(f"<span style='color:#FFA726'>获取数据失败：{err}</span>")
 
     # ---------- 模块七：分享报告 ----------
     def _share_report(self) -> None:
@@ -451,9 +505,9 @@ class ChatTab(QWidget):
                 f.write(md)
             from PyQt6.QtWidgets import QApplication
             QApplication.clipboard().setText(md)
-            self._say(f"<span style='color:#00C853'>📤 报告已复制到剪贴板并保存：{path}</span>")
+            self._say(f"<span style='color:#00E5FF'>📤 报告已复制到剪贴板并保存：{path}</span>")
         except Exception as e:  # noqa: BLE001
-            self._say(f"<span style='color:#FF1744'>分享失败：{e}</span>")
+            self._say(f"<span style='color:#FFA726'>分享失败：{e}</span>")
 
     @staticmethod
     def _normalize(raw: str) -> str:

@@ -52,6 +52,7 @@ class WatchlistTab(QWidget):
         from PyQt6.QtCore import QTimer
         self._worker: _Scan | None = None
         self._watching = False
+        self._fail_count = 0          # 连续失败次数 → 指数退避重连
         self._build_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
@@ -102,7 +103,9 @@ class WatchlistTab(QWidget):
         self.table.doubleClicked.connect(self._on_double_click)
 
         bar = QHBoxLayout()
-        self.chk_watch = QCheckBox("开始盯盘（自动刷新+通知）")
+        self.chk_watch = QCheckBox("实时行情（自动刷新+通知）")
+        self.chk_watch.setToolTip("开启后按交易时段自动拉取现价并评估盯盘条件；"
+                                  "网络失败时自动退避重连（1s→2s→…→30s）")
         self.chk_watch.toggled.connect(self._toggle_watch)
         bar.addWidget(self.chk_watch)
         self.lbl_interval = QLabel("未盯盘")
@@ -217,11 +220,12 @@ class WatchlistTab(QWidget):
 
     def _toggle_watch(self, on: bool) -> None:
         self._watching = on
+        self._fail_count = 0
         if on:
             self.refresh()
         else:
             self._timer.stop()
-            self.lbl_interval.setText("未盯盘")
+            self.lbl_interval.setText("实时行情已停止")
 
     def refresh(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -234,10 +238,16 @@ class WatchlistTab(QWidget):
     # ---------------- 槽 ----------------
     @pyqtSlot(str)
     def _on_bad(self, msg: str) -> None:
-        self.lbl_interval.setText(f"刷新失败：{msg}")
+        # 指数退避重连：1s→2s→4s→8s→16s→30s（封顶），避免风暴
+        self._fail_count += 1
+        delay = [1, 2, 4, 8, 16, 30][min(self._fail_count - 1, 5)]
+        if self._watching:
+            self._timer.start(delay * 1000)
+        self.lbl_interval.setText(f"刷新失败，{delay}s 后自动重试（{msg[:40]}）")
 
     @pyqtSlot(list)
     def _on_scan(self, rows: list) -> None:
+        self._fail_count = 0
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             self._set_row(r, {
@@ -256,7 +266,7 @@ class WatchlistTab(QWidget):
             markets = {row.market for row in rows}
             interval = min(refresh_interval(m, now_cn()) for m in markets)
             self._timer.start(interval * 1000)
-            self.lbl_interval.setText(f"盯盘中 · 每 {interval} 秒")
+            self.lbl_interval.setText(f"实时 · 每 {interval} 秒 · 最后更新 {now_cn().strftime('%H:%M:%S')}")
         elif self._watching:
             self._timer.stop()
             self.lbl_interval.setText("无自选股")

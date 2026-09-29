@@ -10,6 +10,9 @@ for jf in glob.glob('data/*.json'):
     datas.append((jf, 'data'))
 # Web 混合模式静态页（FastAPI 需在打包后也能找到）
 datas.append(('web_ui/static', 'web_ui/static'))
+# 可插拔协作/数据质量/性能配置（可选：缺省用代码默认值）
+if os.path.exists('config.yaml'):
+    datas.append(('config.yaml', '.'))
 
 binaries = []
 hiddenimports = []
@@ -48,6 +51,16 @@ hiddenimports += [
     'data_adapters.bloomberg_adapter', 'data_adapters.lseg_adapter',
     'data_adapters.wind_adapter',
     'app.ui.valuation_tab', 'app.ui.compliance_monitor_tab',
+    # 本轮（任务书A+B）：数据质量 / 性能监控 / PIT-Guard / 7分析师团队 /
+    # 证据链 / 执行控制台 / 财报比率+DCF / 上下文管理（函数内延迟 import，显式收集）
+    'core.data_quality', 'core.performance_monitor', 'core.pit_guard',
+    'core.evidence_manager', 'core.financial_report_parser',
+    'core.fundamental_analyzer', 'core.update_checker',
+    'core.agents.analyst_team', 'core.agents.risk_assessor',
+    'agent.agent_events', 'agent.agent_trace_store', 'agent.execution_console',
+    'context_manager',
+    'app.ui.data_quality_tab', 'app.ui.health_tab', 'app.ui.fundamental_tab',
+    'app.ui.portfolio_optimize_tab', 'app.ui.agent_trace_viewer',
 ]
 
 
@@ -60,7 +73,14 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 打包瘦身：Kronos 运行时走 py_mini_racer(V8)，torch 仅训练脚本使用 → 排除；
+    # 同时排除未使用的科学计算/笔记本大依赖（不含 matplotlib/pandas——程序在用）
+    excludes=[
+        'torch', 'torchvision', 'transformers', 'tensorflow', 'keras',
+        'IPython', 'jupyter', 'jupyterlab', 'notebook',
+        'tensorboard', 'paddle', 'mxnet', 'numba', 'dask',
+        'tests', 'test',
+    ],
     noarchive=False,
     optimize=0,
 )

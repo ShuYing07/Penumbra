@@ -95,3 +95,24 @@ def clear_ticker(ticker: str) -> int:
     except Exception as e:  # noqa: BLE001
         log.warning("绘图清空失败：%s", e)
         return 0
+
+
+def update_drawing_meta(drawing_id: int, meta: Dict[str, Any]) -> bool:
+    """合并更新某条绘图的 meta（如右键改颜色），保留原 points。"""
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT data FROM drawings WHERE id=?", (drawing_id,)).fetchone()
+            if row is None:
+                return False
+            try:
+                payload = json.loads(row[0])
+            except Exception:  # noqa: BLE001
+                payload = {"points": [], "meta": {}}
+            payload["meta"] = {**(payload.get("meta") or {}), **meta}
+            conn.execute("UPDATE drawings SET data=? WHERE id=?",
+                         (json.dumps(payload, ensure_ascii=False), drawing_id))
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("绘图元数据更新失败：%s", e)
+        return False

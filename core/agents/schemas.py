@@ -205,6 +205,34 @@ class Debate(BaseModel):
         return cls(bull_case=[], bear_case=[f"{node} 异常：{err}"])
 
 
+class LeaderReport(BaseModel):
+    """首席分析师（Leader）最终报告：一致性审查 + 汇总结论。"""
+    consensus: str = Field(default="", description="各分析师意见的一致性判断")
+    final_view: str = Field(default="", description="最终汇总观点（120字内）")
+    key_factors: list[str] = Field(default_factory=list, max_length=6)
+    disclaimers: list[str] = Field(default_factory=list, max_length=3)
+
+    @field_validator("consensus", "final_view", mode="before")
+    @classmethod
+    def _v_text(cls, v):
+        return normalize_text(v)
+
+    @field_validator("key_factors", "disclaimers", mode="before")
+    @classmethod
+    def _v_lists(cls, v, info: ValidationInfo):
+        limit = 6 if info.field_name == "key_factors" else 3
+        return normalize_str_list(v, limit)
+
+    @classmethod
+    def degraded(cls, node: str, err: str) -> "LeaderReport":
+        return cls(
+            consensus="各分析师信号已在程序层汇总（LLM 一致性审查降级）",
+            final_view="综合多维度信号，详见风险终审结论；数据仅供参考。",
+            key_factors=["综合多维度信号", "数据仅供参考"],
+            disclaimers=["LLM 汇总降级，结论以程序汇总为准"],
+        )
+
+
 class TraderPlan(BaseModel):
     action: Action = "观望"
     confidence: int = Field(default=50, ge=1, le=99)

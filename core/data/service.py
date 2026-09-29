@@ -121,8 +121,29 @@ def security_type(ticker: str) -> str:
     return "STOCK"
 
 
+def _try_fallback_source(ticker: str, market: str) -> None:
+    """数据质量不合格时的备源尝试：仅对 A 股/指数有可用备源，失败静默。
+
+    指数：上游 ak_src.fetch_daily_index 内部已做 东财→新浪→Tushare 降级；
+    此处补充 yfinance 兜底。A 股：akshare 内部已做新浪/东财降级，不重复联网。
+    """
+    try:
+        if market == "CN_INDEX":
+            yf_code = INDEX_MAP.get(ticker, {}).get("yfinance")
+            if yf_code:
+                from core.data import yfinance_source as yf_src
+                df2 = yf_src.fetch_daily_global(yf_code)
+                if df2 is not None and len(df2) > 0:
+                    cache.upsert_bars(ticker, df2, "fallback-yf")
+                    log.info("备源 yfinance 回填 %s %d 行", ticker, len(df2))
+    except Exception as e:  # noqa: BLE001
+        log.warning("备源回填失败 %s: %s", ticker, e)
+
+
 def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
     """返回 (日线DataFrame, 数据状态说明)。优先读缓存，缺失/陈旧则联网增量补取。"""
+    from core.performance_monitor import perf
+    perf.record_api("get_daily")
     ticker = normalize_ticker(ticker)
     market = market_of(ticker)
     cached = cache.load_bars(ticker)
@@ -151,6 +172,16 @@ def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
             raise ValueError(f"无法识别标的: {ticker}")
         added = cache.upsert_bars(ticker, new_df, "network")
         log.info("行情入库 %s 新增 %d 行", ticker, added)
+        # 数据质量校验（任务书A·模块二）：不合格时记 warning 并尝试备源
+        try:
+            from core.data_quality import validate_stock_data
+            _q = validate_stock_data(new_df)
+            if not _q["passed"]:
+                log.warning("数据质量校验未通过 %s: %s（score=%.1f）",
+                            ticker, "; ".join(_q["issues"][:3]), _q["score"])
+                _try_fallback_source(ticker, market)
+        except Exception:  # noqa: BLE001
+            pass
         return cache.load_bars(ticker), f"network(+{added})"
     except Exception as e:  # noqa: BLE001
         if len(cached) > 0:
@@ -160,6 +191,8 @@ def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
 
 
 def get_realtime(ticker: str) -> dict:
+    from core.performance_monitor import perf
+    perf.record_api("get_realtime")
     market = market_of(ticker)
     try:
         if market == "CN_INDEX":

@@ -18,6 +18,11 @@ import os
 import sys
 from typing import Any, Dict, List
 
+# 支持直接从仓库根目录运行：python -B agent\mcp_server.py
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 from agent.tool_defs import build_registry, call_tool
 
 log = logging.getLogger("stockai.agent.mcp")
@@ -84,7 +89,7 @@ def run_stdio() -> int:
 
 def build_fastmcp_server():
     """FastMCP 完整服务（安装 fastmcp 后可用）。"""
-    mcp = FastMCP("ShuyingInsight",
+    mcp = FastMCP("ShuyingInsight", version="0.7.0",
                   instructions=(
                       "疏影·知微金融数据工具集。所有输出为客观数据展示，"
                       "不构成投资建议。可用工具：行情、指标、新闻、回测、搜索、市场概览。"))
@@ -92,16 +97,28 @@ def build_fastmcp_server():
     for name, entry in reg.items():
         func = entry["func"]
         schema = entry["schema"]
-        # 从 Pydantic Schema 生成参数名（FastMCP 依据函数签名，故包装一层）
-        fields = list(schema.model_fields.keys()) if schema else []
+        # 从 Pydantic Schema 生成带默认值的参数签名
+        fields = []
+        for fname in (list(schema.model_fields.keys()) if schema else []):
+            f = schema.model_fields[fname]
+            dflt = f.get_default(call_default_factory=True)
+            from pydantic_core import PydanticUndefined
+            if f.is_required() or dflt is PydanticUndefined:
+                fields.append(fname)
+            else:
+                fields.append(f"{fname}={dflt!r}")
 
         def make(fn, fnames):
-            def _wrap(**kwargs):
-                return fn(**kwargs)
-            _wrap.__name__ = fn.__name__
-            _wrap.__doc__ = fn.__doc__
-            _wrap.__annotations__ = {f: object for f in fnames}
-            return _wrap
+            # fastmcp 4.x 不支持 **kwargs：动态构造"仅命名参数"的包装函数
+            sig = ", ".join(fnames) or ""
+            _src = f"def _wrapped({sig}):\n    return fn({sig})\n"
+            _ns = {"fn": fn}
+            exec(_src, _ns)  # noqa: S102 - 仅拼接白名单字段名
+            _wrapped = _ns["_wrapped"]
+            _wrapped.__name__ = fn.__name__
+            _wrapped.__doc__ = fn.__doc__
+            return _wrapped
+
         wrapped = make(func, fields)
         mcp.tool()(wrapped)
     return mcp
@@ -118,9 +135,10 @@ def serve(transport: str = "stdio", host: str = "127.0.0.1",
         mcp = build_fastmcp_server()
         if transport == "http":
             log.info("MCP HTTP 服务启动于 http://%s:%d/mcp", host, port)
-            return mcp.run(transport="http", host=host, port=port)
+            return mcp.run(transport="http", host=host, port=port,
+                           show_banner=False)
         log.info("MCP stdio 服务启动（fastmcp）")
-        return mcp.run(transport="stdio")
+        return mcp.run(transport="stdio", show_banner=False)
     if transport == "http":
         log.warning("fastmcp 未安装，HTTP 模式不可用；请手动执行 pip install fastmcp")
         return 2

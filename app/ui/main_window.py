@@ -26,6 +26,7 @@ from app.ui.optimize_tab import OptimizeTab
 from app.ui.overview_tab import OverviewTab
 from app.ui.paper_tab import PaperTab
 from app.ui.portfolio_tab import PortfolioTab
+from app.ui.portfolio_optimize_tab import PortfolioOptimizeTab
 from app.ui.replay_tab import ReplayTab
 from app.ui.watchlist_tab import WatchlistTab
 from app.ui.stock_directory_tab import StockDirectoryTab
@@ -35,6 +36,9 @@ from app.ui.data_source_tab import DataSourceTab
 from app.ui.privacy_tab import PrivacyTab
 from app.ui.valuation_tab import ValuationTab
 from app.ui.compliance_monitor_tab import ComplianceMonitorTab
+from app.ui.fundamental_tab import FundamentalTab
+from app.ui.data_quality_tab import DataQualityTab
+from app.ui.health_tab import HealthTab
 from app.ui.ui_theme import (BG_CARD, BORDER, TEXT_MAIN, TEXT_SUB, ACCENT,
                             UP, DOWN, WARN, BG_HOVER,
                             current_theme, set_theme, apply_theme, toggle_theme)
@@ -48,13 +52,14 @@ log = logging.getLogger("stockai.ui.main_window")
 NAV_GROUPS: list[tuple[str, list[tuple[str, int]]]] = [
     ("发现", [("💬 对话分析", 0), ("📊 市场概览", 1), ("📋 股票大全", 16)]),
     ("研究", [("⭐ 自选股", 2), ("📈 分析", 3), ("📉 K线图", 4),
-              ("⚔️ 多空辩论", 15), ("🕸️ 产业图谱", 14)]),
+              ("📊 基本面", 24), ("⚔️ 多空辩论", 15), ("🕸️ 产业图谱", 14)]),
     ("验证", [("💼 模拟盘", 5), ("🔬 回测", 6), ("📊 组合回测", 7),
-              ("⚙️ 参数寻优", 8), ("⏪ 信号回放", 9)]),
+              ("📊 组合优化", 23), ("⚙️ 参数寻优", 8), ("⏪ 信号回放", 9)]),
     ("积累", [("📚 学习库", 10), ("📝 决策记录", 11), ("📋 分析日志", 12),
               ("🛡️ 合规审计", 13), ("⚖️ Swarm估值", 21), ("🛡️ 合规监控", 22)]),
     ("系统", [("🤝 协作空间", 17), ("🛡️ 风控", 18),
-              ("🔌 数据源", 19), ("🔒 隐私与数据", 20)]),
+              ("🔌 数据源", 19), ("🔒 隐私与数据", 20),
+              ("✅ 数据质量", 25), ("🩺 系统健康", 26)]),
 ]
 NAV_ITEMS: list[tuple[str, int]] = [item for _g, items in NAV_GROUPS for item in items]
 
@@ -62,6 +67,10 @@ NAV_ITEMS: list[tuple[str, int]] = [item for _g, items in NAV_GROUPS for item in
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        import time as _time
+        from core.performance_monitor import perf as _perf
+        self._start_handle = _time.monotonic()
+        _perf.record_api("ui_start")
         self.setWindowTitle(tr("app.title"))
         self.resize(1200, 800)
         # 恢复窗口位置（如果上次保存过）
@@ -121,6 +130,10 @@ class MainWindow(QMainWindow):
             20: ("隐私与数据", PrivacyTab),
             21: ("Swarm估值", ValuationTab),
             22: ("合规监控", ComplianceMonitorTab),
+            23: ("组合优化", PortfolioOptimizeTab),
+            24: ("基本面", FundamentalTab),
+            25: ("数据质量", DataQualityTab),
+            26: ("系统健康", HealthTab),
         }
         self._created = {}
 
@@ -131,7 +144,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.watchlist_tab, "自选股")
         self.tabs.addTab(self.analysis_tab, "分析")
         self.tabs.addTab(self.chart_tab, "K线图")
-        for i in range(5, 23):
+        for i in range(5, 27):
             name, _ = self._lazy_tabs[i]
             self.tabs.addTab(QWidget(), name)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -312,6 +325,11 @@ class MainWindow(QMainWindow):
         self._brief_timer.timeout.connect(self._maybe_daily_briefing)
         self._brief_timer.start(60000)  # 每分钟检查一次
 
+        # 模块六：启动自动检查更新（延迟 8s，后台线程，非阻塞，仅提示不自动下载）
+        QTimer.singleShot(8000, self._auto_check_update)
+        # 模块六：启动预热股票索引到内存（后台线程，减少首次筛选/搜索延迟）
+        QTimer.singleShot(3000, self._prewarm_index)
+
 
         # 内置定时学习（9/17/20点自动跑，后台线程，不占CPU）
         try:
@@ -322,6 +340,13 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+        # 模块三：启动耗时记录（供系统健康面板）
+        try:
+            from core.performance_monitor import perf
+            perf.stop_timer("startup", self._start_handle)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _prime_knowledge_base(self) -> None:
         """学习库懒灌：仅当向量库为空时后台入库（打开「学习库」tab 触发）。"""
         try:
@@ -441,6 +466,44 @@ class MainWindow(QMainWindow):
                 return self.nav_buttons[i]
         return self.nav_buttons[0]
 
+    # ---------- 模块六：自动更新检查 / 索引预热 ----------
+    def _auto_check_update(self) -> None:
+        """启动后后台检查一次 GitHub Release；有新版本→状态栏提示（不自动下载）。"""
+        from PyQt6.QtCore import QThread
+        from PyQt6.QtCore import pyqtSignal
+
+        class _Checker(QThread):
+            found = pyqtSignal(object)
+
+            def run(self):
+                try:
+                    from config_manager import check_update
+                    self.found.emit(check_update(timeout=5.0))
+                except Exception:  # noqa: BLE001
+                    pass
+
+        self._update_checker = _Checker()
+        self._update_checker.found.connect(
+            lambda res: self.statusBar().showMessage(
+                f"发现新版本 v{res['latest']}（当前 v{APP_VERSION}）· 可到 帮助→检查更新 查看"
+                if res.get("has_update") else "", 12000))
+        self._update_checker.start()
+
+    def _prewarm_index(self) -> None:
+        """后台预热股票索引（内存缓存），首次筛选/自然语言选股不再慢。"""
+        import threading
+
+        def _work():
+            try:
+                from core.screener import _index
+                n = len(_index())
+                if n:
+                    self.statusBar().showMessage(f"股票索引已预热（{n} 只），筛选已就绪", 4000)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
+
     # ---------- 模块三：全局命令面板 / 浮动 AI ----------
     def _open_command_palette(self) -> None:
         from app.ui.command_palette import CommandPaletteDialog
@@ -473,15 +536,21 @@ class MainWindow(QMainWindow):
             pass
 
     def _open_ai_assistant(self) -> None:
-        """浮动 AI 按钮：唤起对话分析，自动感知当前选中的股票。"""
+        """浮动 AI 按钮：唤起对话分析，自动感知当前页面与选中股票。"""
         cur = ""
+        page = "对话分析"
         try:
+            # 页面感知：当前激活的 tab 名称
+            w = self.tabs.currentWidget()
+            idx = self.tabs.indexOf(w)
+            page = self.tabs.tabText(idx) if idx >= 0 else page
             # 感知当前股票：优先分析页输入框，其次右侧面板标题
             t = self.analysis_tab.input.text().strip()
             if t:
                 cur = t
             elif self.r_stock_name.text() and "未选择" not in self.r_stock_name.text():
                 cur = self.r_stock_name.text().split()[-1]
+            self.chat_tab.set_context(page, cur)
         except Exception:  # noqa: BLE001
             pass
         self._switch_tab(0, self._nav_btn_of(0))
@@ -525,13 +594,18 @@ class MainWindow(QMainWindow):
         if _os.path.exists(briefing_path(today)):
             return  # 当天已生成
         try:
-            from core.daily_briefing import build_briefing
+            from core.daily_briefing import build_briefing, briefing_path, push_channels
             html = build_briefing(now)
             if self.tray is not None:
                 self.tray.showMessage(
                     "📰 每日市场简报", html,
                     QSystemTrayIcon.MessageIcon.Information, 8000)
-            self.statusBar().showMessage("📰 今日市场简报已生成", 5000)
+            # 多渠道推送：飞书 Webhook / 邮件（未配置自动跳过）
+            try:
+                push_channels(briefing_path(today), html)
+            except Exception:  # noqa: BLE001
+                pass
+            self.statusBar().showMessage("📰 今日市场简报已生成（含多渠道推送）", 5000)
         except Exception as e:  # noqa: BLE001
             log.debug("每日简报生成失败: %s", e)
 
@@ -667,7 +741,10 @@ class MainWindow(QMainWindow):
         if idx in self._lazy_tabs and idx not in self._created:
             name, cls = self._lazy_tabs[idx]
             try:
+                from core.performance_monitor import perf as _perf
+                _h = _perf.start_timer(f"tab.{idx}.{name}")
                 tab = cls()
+                _perf.stop_timer(f"tab.{idx}.{name}", _h)
                 cur = self.tabs.currentIndex()
                 self.tabs.removeTab(idx)
                 self.tabs.insertTab(idx, tab, name)

@@ -61,6 +61,7 @@ class AnalysisState(TypedDict, total=False):
     bear_case: list
     trader: dict
     risk: dict
+    risk_assess: dict
     final: dict
     tokens: dict
     errors: list
@@ -73,8 +74,9 @@ class AnalysisState(TypedDict, total=False):
 NODE_LABELS = {
     "technical": "技术分析师", "fundamental": "基本面分析师",
     "news": "新闻分析师", "sentiment": "情绪分析师",
+    "risk_assessor": "风险评估师",
     "bull": "多头研究员", "bear": "空头研究员",
-    "trader": "交易员", "risk": "风控终审",
+    "trader": "交易员", "risk": "风控终审", "leader": "首席分析师",
 }
 
 
@@ -281,14 +283,18 @@ def build_graph(runner: LLMRunner, _cache_key: str | None = None):
     builder.add_edge("fundamental", "news")
     builder.add_edge("news", "sentiment")
 
+    # 风险评估师（确定性统计，介于分析师与辩论之间）
+    builder.add_edge("sentiment", "risk_assessor")
+
     # 多空辩论
-    builder.add_edge("sentiment", "bull")
+    builder.add_edge("risk_assessor", "bull")
     builder.add_edge("bull", "bear")
 
-    # trader → risk → END
+    # trader → risk → leader(首席分析师汇总) → END
     builder.add_edge("bear", "trader")
     builder.add_edge("trader", "risk")
-    builder.add_edge("risk", END)
+    builder.add_edge("risk", "leader")
+    builder.add_edge("leader", END)
     g = builder.compile(checkpointer=MemorySaver())
     if _cache_key:
         _GRAPH_CACHE[_cache_key] = g
@@ -303,6 +309,8 @@ def _delta_degraded(node_key: str, delta: dict) -> bool:
     if node_key in ("bull", "bear"):
         vals = (delta.get("bull_case") or []) + (delta.get("bear_case") or [])
         return any("异常" in str(x) for x in vals)
+    if node_key == "risk_assessor":
+        return "不可用" in str((delta.get("risk_assess") or {}).get("risk_level", ""))
     if node_key == "trader":
         return "异常" in str((delta.get("trader") or {}).get("reasoning", ""))
     if node_key == "risk":
@@ -319,8 +327,12 @@ def degraded_nodes(state: dict) -> list[str]:
             bad.append(key)
     if "异常" in str((state.get("trader") or {}).get("reasoning", "")):
         bad.append("trader")
+    if "不可用" in str((state.get("risk_assess") or {}).get("risk_level", "")):
+        bad.append("risk_assessor")
     if any("异常" in str(x) for x in ((state.get("risk") or {}).get("notes") or [])):
         bad.append("risk")
+    if "降级" in str((state.get("final") or {}).get("leader", {}).get("consensus", "")):
+        bad.append("leader")
     return bad
 
 
@@ -410,6 +422,13 @@ def run_analysis(ticker: str, runner: LLMRunner | None = None, progress_cb=None,
             index_analysis(result)
         except Exception as e:  # noqa: BLE001
             log.warning("学习库入库跳过：%s", e)
+        # 模块八：数据溯源与证据链（程序事实+结论登记，失败不影响主流程）
+        try:
+            from core.evidence_manager import save_report_evidence
+            aid = f"{result.get('ticker','')}|{decision_id}"
+            save_report_evidence(aid, result)
+        except Exception as e:  # noqa: BLE001
+            log.warning("证据链登记跳过：%s", e)
     if own_runner:
         log.info("本次分析 token：%s", runner.usage())
     return {"state": result, "decision_id": decision_id}
