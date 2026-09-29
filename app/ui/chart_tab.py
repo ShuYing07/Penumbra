@@ -211,6 +211,8 @@ class ChartTab(QWidget):
             self.status.setText("请输入标的代码")
             return
         if self._worker and self._worker.isRunning():
+            # 旧请求仍在途：明确提示而不是静默丢弃，避免"点了没反应"
+            self.status.setText(f"上一请求仍在加载，请稍候再试（当前标的：{self._ticker}）")
             return
         self._ticker = t
         self.status.setText(f"{t} 加载中…")

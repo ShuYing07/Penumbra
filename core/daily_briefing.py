@@ -33,13 +33,22 @@ def _index_rows() -> list[dict]:
         return []
 
 
+def _norm_code(code: str) -> str:
+    """代码规范化：HK00700（旧格式）→ 0700.HK（标准格式）。"""
+    c = code.strip().upper()
+    if c.startswith("HK") and c[2:].isdigit():
+        return f"{c[2:]}.HK"
+    return c
+
+
 def _watchlist_rows() -> list[dict]:
     """自选股实时快照（降级友好）。"""
     try:
         from core.data.service import get_daily
         from core.quant.indicators import latest_snapshot
         rows = []
-        for code in ("SH600519", "AAPL", "SZ300750", "HK00700"):
+        for raw in ("SH600519", "AAPL", "SZ300750", "0700.HK"):
+            code = _norm_code(raw)
             df, _src = get_daily(code)
             if df is None or len(df) < 2:
                 continue
