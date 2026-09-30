@@ -225,6 +225,17 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None,
             log.warning("历史决策上下文加载失败：%s", e)
             history = []
 
+    # 金融知识图谱上下文（模块七）：事件传导链注入分析。
+    # 注意 PIT 纪律：图谱为当前快照，回放模式不注入（避免未来事件泄露）。
+    kg_ctx: dict = {}
+    if not replay:
+        try:
+            from memory.graph_memory import query_event_chain
+            kg_ctx = query_event_chain(ticker, depth=3)
+        except Exception as e:  # noqa: BLE001
+            log.debug("图谱上下文加载失败：%s", e)
+            kg_ctx = {}
+
     # 相似历史形态检索（四期）：近20日形态 vs 全历史，含其后真实表现
     # 回放时 bars 已截断，find_similar 自然只能见到 as_of 之前的数据；批量回放精简模式跳过
     if light:
@@ -257,6 +268,7 @@ def gather_facts(ticker: str, progress_cb=None, as_of: str | None = None,
         "errors": [],
         "history": history,
         "patterns": patterns,
+        "kg": kg_ctx,
         "started_at": now_cn().isoformat(timespec="seconds"),
     }
 

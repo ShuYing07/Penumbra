@@ -123,6 +123,56 @@ def chain(entity_a: str, entity_b: str, max_hops: int = 4) -> list[list[str]]:
     return paths
 
 
+def query_event_chain(entity: str, depth: int = 3) -> dict:
+    """事件传导链查询：从实体出发沿影响关系（含入边/出边）展开到事件节点。
+
+    返回 {root, chains, events}：
+    - chains: 传导路径 [{path, rels}]，入边关系标注为 reversed:<rel>（表示“被…影响”）；
+    - events: 传导链上的事件节点 [{entity, props, reached_via}]；
+    - 没有图谱数据时返回 {root, chains: [], events: []}。
+    """
+    with _conn() as c:
+        edge_rows = c.execute("SELECT src,dst,rel,weight FROM edges").fetchall()
+        node_type = {r["entity"]: r["type"] for r in c.execute("SELECT entity,type FROM nodes").fetchall()}
+    out_adj: dict[str, list[dict]] = {}
+    in_adj: dict[str, list[dict]] = {}
+    for r in edge_rows:
+        out_adj.setdefault(r["src"], []).append({"dst": r["dst"], "rel": r["rel"]})
+        in_adj.setdefault(r["dst"], []).append({"dst": r["src"], "rel": "reversed:" + r["rel"]})
+
+    def _expand(cur: str) -> list[dict]:
+        return list(out_adj.get(cur, [])) + list(in_adj.get(cur, []))
+
+    chains: list[dict] = []
+    events: dict[str, dict] = {}
+    q = deque([(entity, [entity], [])])
+    seen = set()
+    while q:
+        cur, path, rels = q.popleft()
+        key = "|".join(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if node_type.get(cur) == "event" and cur not in events:
+            events[cur] = {"entity": cur, "props": {}, "reached_via": path[:]}
+            try:
+                with _conn() as c:
+                    row = c.execute("SELECT props FROM nodes WHERE entity=?", (cur,)).fetchone()
+                if row:
+                    events[cur]["props"] = json.loads(row["props"])
+            except Exception:  # noqa: BLE001
+                pass
+        if len(path) > depth:
+            continue
+        for e in _expand(cur):
+            if e["dst"] in path:
+                continue
+            q.append((e["dst"], path + [e["dst"]], rels + [e["rel"]]))
+            if node_type.get(e["dst"]) == "event":
+                chains.append({"path": path + [e["dst"]], "rels": rels + [e["rel"]]})
+    return {"root": entity, "chains": chains[:20], "events": list(events.values())}
+
+
 def seed_demo() -> int:
     """写入演示种子关系（幂等），供知识库浏览。"""
     demo = [

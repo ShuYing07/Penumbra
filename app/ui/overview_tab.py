@@ -82,8 +82,10 @@ class OverviewTab(QWidget):
             self.table.setItem(r, 0, QTableWidgetItem(str(it.get("name", ""))))
             self.table.setItem(r, 1, QTableWidgetItem(str(it.get("price", ""))))
             item_chg = QTableWidgetItem(f"{chg:+.2f}")
-            # 国内红涨绿跌
-            item_chg.setForeground(QColor("#e5534b") if chg >= 0 else QColor("#26c07a"))
+            # 涨跌色统一走主题惯例（默认 A股红涨绿跌）
+            from app.ui.ui_theme import down_color, up_color
+            item_chg.setForeground(QColor(up_color()) if chg >= 0
+                                   else QColor(down_color()))
             self.table.setItem(r, 2, item_chg)
             self.table.setItem(r, 3, QTableWidgetItem(sig))
         self.btn.setEnabled(True)

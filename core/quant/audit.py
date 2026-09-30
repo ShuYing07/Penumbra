@@ -99,7 +99,21 @@ def walk_forward(df: pd.DataFrame, market: str, strategy: str,
 def run_audit(df: pd.DataFrame, market: str, strategy: str,
               params: Optional[dict] = None, config=None,
               in_ratio: float = 0.6) -> dict:
-    """一站式回测审计：前视偏差 + Walk-Forward。"""
+    """一站式回测审计：前视偏差 + Walk-Forward + 稳健性指标（GT-Score 等）。"""
     look = scan_lookahead(df, strategy, params)
     wf = walk_forward(df, market, strategy, params, config, in_ratio)
-    return {"strategy": strategy, "lookahead": look, "walk_forward": wf}
+    robust = {}
+    try:
+        res = run_backtest(df, market, strategy, params or None, config)
+        from core.quant.backtest import permutation_test
+        _rets = res.equity["strategy"].pct_change().fillna(0.0)
+        _positions = (_rets.abs() > 1e-9).astype(float).values  # 净值变化非0 → 持仓
+        perm = permutation_test(_rets, _positions)
+        from core.quant.robust_metrics import robust_report
+        robust = robust_report(res.metrics, perm["p_value"],
+                               res.equity["strategy"].pct_change().dropna(),
+                               res.equity, res.rounds)
+    except Exception as e:  # noqa: BLE001
+        robust = {"error": f"稳健性指标计算失败：{e}"}
+    return {"strategy": strategy, "lookahead": look, "walk_forward": wf,
+            "robust": robust}

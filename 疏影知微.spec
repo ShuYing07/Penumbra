@@ -61,6 +61,15 @@ hiddenimports += [
     'context_manager',
     'app.ui.data_quality_tab', 'app.ui.health_tab', 'app.ui.fundamental_tab',
     'app.ui.portfolio_optimize_tab', 'app.ui.agent_trace_viewer',
+    # 本轮（金融AI评测 / 实时数据管道 / 回测审计 / 事件图谱 /
+    # AI评审员+合规沙箱 / 高级图表引擎 / 自我进化ReMe记忆）
+    'core.eval.eval_benchmark', 'core.eval.eval_suite',
+    'core.etl.stream_pipeline',
+    'core.quant.backtest_auditor', 'core.quant.playback',
+    'core.event_graph', 'core.chart_sync', 'core.drawings_advanced',
+    'core.agents.evo_memory',
+    'security.ai_reviewer', 'security.compliance_sandbox',
+    'app.ui.eval_tab', 'app.ui.event_graph_tab', 'app.ui.evo_tab',
 ]
 
 

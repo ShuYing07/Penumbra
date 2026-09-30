@@ -1,0 +1,7 @@
+{
+  "name": "sentiment_plugin",
+  "version": "0.1.0",
+  "author": "疏影雅集",
+  "description": "扩展情感分析能力：对新闻/公告文本打分并输出情绪标签。",
+  "permissions": ["data_access"]
+}

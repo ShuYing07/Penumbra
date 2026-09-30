@@ -141,6 +141,37 @@ def deep_researcher(state: Dict[str, object]) -> Dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
+# 质量门控（模块五 · 参考 marvel：分析师输出 → 质量门控 → 辩论 → 风控）
+# ---------------------------------------------------------------------------
+_REQUIRED_SIGNAL_FIELDS = ("stance", "confidence", "view")
+
+
+def quality_gate(signals: Dict[str, object],
+                 min_confidence: float = 0.3) -> Dict[str, object]:
+    """对分析师信号做质量门控：缺关键字段或置信度过低 → 剔除。
+
+    返回 {passed_keys, gated, passed, report}。置信度缺省按 0（剔除）。
+    """
+    passed_keys: list[str] = []
+    gated: list[dict] = []
+    for key, sig in (signals or {}).items():
+        if not isinstance(sig, dict):
+            gated.append({key: "非结构化输出（非 dict）"})
+            continue
+        missing = [f for f in _REQUIRED_SIGNAL_FIELDS if not sig.get(f)]
+        conf = sig.get("confidence")
+        if missing:
+            gated.append({key: f"缺关键字段 {missing}"})
+        elif conf is None or conf < min_confidence:
+            gated.append({key: f"置信度 {conf} < {min_confidence}"})
+        else:
+            passed_keys.append(key)
+    return {"passed_keys": passed_keys, "gated": gated,
+            "passed": not gated,
+            "report": f"{len(passed_keys)} 通过 / {len(gated)} 剔除"}
+
+
+# ---------------------------------------------------------------------------
 # 并行执行组
 # ---------------------------------------------------------------------------
 def _apply_signal(state: Dict[str, object], key: str, out: Dict[str, object]) -> Dict[str, object]:
@@ -289,6 +320,19 @@ async def run_analysis_team_async(ticker: str, runner=None,
     _cb("数据组并行分析（技术/基本面/新闻/情绪）…")
     await asyncio.get_event_loop().run_in_executor(
         None, run_data_group, state, runner)
+
+    # 质量门控（marvel 式：检查信号完整性/置信度，剔除劣质信号）
+    state["quality_gate"] = quality_gate(state.get("signals") or {})
+    gated_keys = [list(g.keys())[0] for g in state["quality_gate"]["gated"]]
+    if gated_keys:
+        _cb(f"质量门控：剔除劣质信号 {', '.join(gated_keys)}")
+    for k in gated_keys:
+        state["signals"].pop(k, None)
+
+    _cb("A股特色分析师并行分析（政策/游资/解禁/量价）…")
+    from core.agents.ashare_analysts import run_ashare_group
+    await asyncio.get_event_loop().run_in_executor(
+        None, run_ashare_group, state, runner)
 
     _cb("综合组并行分析（宏观/风险/深度研究）…")
     await asyncio.get_event_loop().run_in_executor(

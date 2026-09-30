@@ -98,6 +98,12 @@ def market_of(ticker: str) -> str:
         return "CRYPTO"
     if re.fullmatch(r"\d{4,5}\.HK", t):
         return "HK"   # 港股须在通用 "." 分支之前（0700.HK / 00700.HK）
+    if re.fullmatch(r"\d{4}\.T", t):
+        return "JP"   # 日股：7203.T（丰田）
+    if re.fullmatch(r"\d{6}\.KS", t):
+        return "KR"   # 韩股：005930.KS（三星）
+    if re.fullmatch(r"\d{4}\.TW", t):
+        return "TW"   # 台股：2330.TW（台积电）
     if re.fullmatch(r"[A-Z.]{1,10}", t) and "." not in t and re.fullmatch(r"[A-Z]{1,6}", t):
         return "US"
     if "." in t:

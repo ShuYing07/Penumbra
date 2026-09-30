@@ -39,6 +39,15 @@ from app.ui.compliance_monitor_tab import ComplianceMonitorTab
 from app.ui.fundamental_tab import FundamentalTab
 from app.ui.data_quality_tab import DataQualityTab
 from app.ui.health_tab import HealthTab
+from app.ui.multimodal_tab import MultimodalTab
+from app.ui.stream_monitor_tab import StreamMonitorTab
+from app.ui.compliance_test_tab import ComplianceTestTab
+from app.ui.plugin_manager_tab import PluginManagerTab
+from app.ui.terminal_tab import TerminalTab
+from app.ui.workflow_tab import WorkflowTab
+from app.ui.eval_tab import EvalTab
+from app.ui.event_graph_tab import EventGraphTab
+from app.ui.evo_tab import EvoTab
 from app.ui.ui_theme import (BG_CARD, BORDER, TEXT_MAIN, TEXT_SUB, ACCENT,
                             UP, DOWN, WARN, BG_HOVER,
                             current_theme, set_theme, apply_theme, toggle_theme)
@@ -50,16 +59,22 @@ log = logging.getLogger("stockai.ui.main_window")
 
 # 导航分组（模块一：按任务阶段分组 —— 发现 / 研究 / 验证 / 积累 / 系统）
 NAV_GROUPS: list[tuple[str, list[tuple[str, int]]]] = [
-    ("发现", [("💬 对话分析", 0), ("📊 市场概览", 1), ("📋 股票大全", 16)]),
+    ("发现", [("💬 对话分析", 0), ("📊 市场概览", 1), ("📋 股票大全", 16),
+              ("🖥️ 终端模式", 31)]),
     ("研究", [("⭐ 自选股", 2), ("📈 分析", 3), ("📉 K线图", 4),
-              ("📊 基本面", 24), ("⚔️ 多空辩论", 15), ("🕸️ 产业图谱", 14)]),
+              ("📊 基本面", 24), ("⚔️ 多空辩论", 15), ("🕸️ 产业图谱", 14),
+              ("⚙️ 工作流编辑器", 32), ("🎯 分析质量", 33),
+              ("🕸️ 事件图谱", 34)]),
     ("验证", [("💼 模拟盘", 5), ("🔬 回测", 6), ("📊 组合回测", 7),
               ("📊 组合优化", 23), ("⚙️ 参数寻优", 8), ("⏪ 信号回放", 9)]),
     ("积累", [("📚 学习库", 10), ("📝 决策记录", 11), ("📋 分析日志", 12),
-              ("🛡️ 合规审计", 13), ("⚖️ Swarm估值", 21), ("🛡️ 合规监控", 22)]),
+              ("🛡️ 合规审计", 13), ("⚖️ Swarm估值", 21), ("🛡️ 合规监控", 22),
+              ("🧪 合规测试", 29), ("🔌 插件管理", 30),
+              ("🌱 进化追踪", 35)]),
     ("系统", [("🤝 协作空间", 17), ("🛡️ 风控", 18),
               ("🔌 数据源", 19), ("🔒 隐私与数据", 20),
-              ("✅ 数据质量", 25), ("🩺 系统健康", 26)]),
+              ("✅ 数据质量", 25), ("🩺 系统健康", 26),
+              ("👁️ 多模态解析", 27), ("📡 实时流", 28)]),
 ]
 NAV_ITEMS: list[tuple[str, int]] = [item for _g, items in NAV_GROUPS for item in items]
 
@@ -134,6 +149,15 @@ class MainWindow(QMainWindow):
             24: ("基本面", FundamentalTab),
             25: ("数据质量", DataQualityTab),
             26: ("系统健康", HealthTab),
+            27: ("多模态解析", MultimodalTab),
+            28: ("实时流", StreamMonitorTab),
+            29: ("合规测试", ComplianceTestTab),
+            30: ("插件管理", PluginManagerTab),
+            31: ("终端模式", TerminalTab),
+            32: ("工作流编辑器", WorkflowTab),
+            33: ("分析质量", EvalTab),
+            34: ("事件图谱", EventGraphTab),
+            35: ("进化追踪", EvoTab),
         }
         self._created = {}
 
@@ -144,7 +168,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.watchlist_tab, "自选股")
         self.tabs.addTab(self.analysis_tab, "分析")
         self.tabs.addTab(self.chart_tab, "K线图")
-        for i in range(5, 27):
+        for i in range(5, 36):
             name, _ = self._lazy_tabs[i]
             self.tabs.addTab(QWidget(), name)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -563,6 +587,19 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, e) -> None:  # noqa: N802
         super().resizeEvent(e)
+        # 响应式（模块四）：窄窗口自动折叠右侧信息面板，宽窗口恢复
+        try:
+            if hasattr(self, "info_dock"):
+                if self.width() < 1180:
+                    if self.info_dock.isVisible() and not self.info_dock.isFloating():
+                        self._auto_collapsed_info = True
+                        self.info_dock.hide()
+                else:
+                    if getattr(self, "_auto_collapsed_info", False):
+                        self._auto_collapsed_info = False
+                        self.info_dock.show()
+        except Exception:  # noqa: BLE001
+            pass
         if hasattr(self, "ai_fab"):
             m = 24
             self.ai_fab.move(self.width() - self.ai_fab.width() - m,

@@ -120,10 +120,17 @@ def update_channel() -> str:
 
 
 # ---------- 版本与更新检查 ----------
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 REPO_API = "https://api.github.com/repos/ShuYing07/Penumbra/releases/latest"
 REPO_URL = "https://github.com/ShuYing07/Penumbra"
 RELEASES_URL = "https://github.com/ShuYing07/Penumbra/releases"
+
+
+def _parse_version(v: str) -> tuple:
+    """把 'v0.9.0-beta' 之类的版本串解析为可比较元组（标准库，不引依赖）。"""
+    import re
+    nums = re.findall(r"\d+", v)
+    return tuple(int(x) for x in nums[:3]) or (0,)
 
 
 def check_update(timeout: float = 6.0) -> dict:
@@ -144,7 +151,8 @@ def check_update(timeout: float = 6.0) -> dict:
             data = json.loads(r.read().decode("utf-8"))
         out["latest"] = data.get("tag_name", APP_VERSION).lstrip("vV")
         out["url"] = data.get("html_url") or RELEASES_URL
-        out["has_update"] = out["latest"] != APP_VERSION
+        # 语义化比较：仅当线上版本高于本地才提示更新（0.9.0 本地 > 0.7.0 线上不提示）
+        out["has_update"] = _parse_version(out["latest"]) > _parse_version(APP_VERSION)
     except Exception as e:  # noqa: BLE001
         # 无 Release / 网络不可达：不报错，直接引导用户去 Releases 页
         out["error"] = str(e)[:160]

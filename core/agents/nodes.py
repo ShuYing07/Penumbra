@@ -238,12 +238,20 @@ def leader_node(state, runner):
     bull = state.get("bull_case") or []
     bear = state.get("bear_case") or []
     final = state.get("final") or {}
+    kg = state.get("kg") or {}
+    kg_note = ""
+    if kg.get("chains"):
+        kg_note = (
+            "\n金融知识图谱·事件传导链（客观关联，仅作参考）：\n"
+            + P.j([{"chain": c["path"], "rels": c["rels"]} for c in kg["chains"][:5]])
+            + "\n"
+        )
     user = (
         f"{P.header(state)}\n"
         f"四名专业分析师信号：\n{P.j(signals)}\n\n"
         f"风险评估师（程序统计）：\n{P.j(risk_assess)}\n\n"
         f"多头理由：{P.j(bull)}\n空头理由：{P.j(bear)}\n"
-        f"风控终审：{P.j(final)}\n\n"
+        f"风控终审：{P.j(final)}\n{kg_note}"
         "请输出 JSON：consensus(各信号一致性判断与分歧点)、final_view(120字内最终汇总观点)、"
         "key_factors(3-6条关键影响因子)、disclaimers(1-3条提示)。"
     )

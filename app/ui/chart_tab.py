@@ -137,13 +137,19 @@ class ChartTab(QWidget):
         top.addWidget(QLabel("绘图"))
         self.tool_btns: dict[str, QPushButton] = {}
         for key, label in (("trend", "↗ 趋势线"), ("hlevel", "— 水平线"),
-                           ("fib", "≋ 斐波那契"), ("rect", "▭ 矩形")):
+                           ("fib", "≋ 斐波那契"), ("rect", "▭ 矩形"),
+                           ("gann", "◈ Gann"), ("pitchfork", "⨏ Pitchfork"),
+                           ("harmonic", "❋ 谐波"), ("elliott", "∿ 艾略特")):
             tb = QPushButton(label)
             tb.setCheckable(True)
             tb.setToolTip({"trend": "点击两点画趋势线（右键收藏）",
                            "hlevel": "点击一点画水平线（右键收藏）",
                            "fib": "点击高/低两点画斐波那契回撤（右键收藏）",
-                           "rect": "点击对角两点画矩形区间（右键收藏）"}[key])
+                           "rect": "点击对角两点画矩形区间（右键收藏）",
+                           "gann": "点击一点为锚点画 Gann 角度线（1x1/1x2/2x1）",
+                           "pitchfork": "依次点 A/B/C 三点画 Pitchfork 通道",
+                           "harmonic": "依次点 A/B/C 三点画谐波 AB=CD 关键位",
+                           "elliott": "依次点 4 个摆动点投影第 5 浪目标"}[key])
             tb.setStyleSheet(
                 "QPushButton{padding:3px 8px;border-radius:8px;font-size:12px;}"
                 "QPushButton:checked{background:rgba(0,229,255,0.15);color:#00E5FF;}"
@@ -270,7 +276,11 @@ class ChartTab(QWidget):
         self.status.setText(
             {"trend": "趋势线：点击图上第 1 点", "hlevel": "水平线：点击图上 1 点",
              "fib": "斐波那契：点击高点，再点击低点",
-             "rect": "矩形：点击左上角，再点击右下角"}[key])
+             "rect": "矩形：点击左上角，再点击右下角",
+             "gann": "Gann：点击 1 个锚点",
+             "pitchfork": "Pitchfork：依次点击 A → B → C（三点）",
+             "harmonic": "谐波：依次点击 A → B → C（三点，自动计算 D）",
+             "elliott": "艾略特：依次点击 4 个摆动点（浪1起/终、浪3起/终）"}[key])
 
     def _on_click(self, event) -> None:
         if self._bars is None or len(self._bars) == 0:
@@ -301,7 +311,9 @@ class ChartTab(QWidget):
             except Exception:  # noqa: BLE001
                 pass
         self._pending.append({"x": offset + x, "y": y})
-        need = {"trend": 2, "hlevel": 1, "fib": 2, "rect": 2}[self._tool_mode]
+        need = {"trend": 2, "hlevel": 1, "fib": 2, "rect": 2,
+                "gann": 1, "pitchfork": 3, "harmonic": 3, "elliott": 4}[
+            self._tool_mode]
         if len(self._pending) >= need:
             self._finish_drawing()
 
@@ -318,6 +330,18 @@ class ChartTab(QWidget):
             a, b = (pts[0], pts[1]) if pts[0]["y"] >= pts[1]["y"] else (pts[1], pts[0])
             data = [{"x": a["x"], "y": a["y"]}, {"x": b["x"], "y": b["y"]}]
             meta = {"levels": [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]}
+        elif mode == "gann":
+            data = [{"x": pts[0]["x"], "y": pts[0]["y"]}]
+            meta = {}
+        elif mode == "pitchfork":
+            data = [{"x": p["x"], "y": p["y"]} for p in pts[:3]]
+            meta = {}
+        elif mode == "harmonic":
+            data = [{"x": p["x"], "y": p["y"]} for p in pts[:3]]
+            meta = {}
+        elif mode == "elliott":
+            data = [{"x": p["x"], "y": p["y"]} for p in pts[:4]]
+            meta = {}
         else:  # rect
             data = [{"x": pts[0]["x"], "y": pts[0]["y"]},
                     {"x": pts[1]["x"], "y": pts[1]["y"]}]
@@ -385,6 +409,83 @@ class ChartTab(QWidget):
                              size=(abs(x2 - x1), abs(y2 - y1)),
                              pen=pg.mkPen("#FFA726", width=1.4))
             items.append(roi)
+        # ---- 高级绘图：Gann / Pitchfork / 谐波 / 艾略特 ----
+        elif mode == "gann":
+            from core.drawings_advanced import gann_angles
+            a = data[0]
+            xa = lx(a["x"])
+            if not (0 <= xa < n):
+                return []
+            lines = gann_angles({"x": xa, "y": a["y"]}, scale=1.0)
+            for ln in lines:
+                it = pg.PlotDataItem(
+                    [ln["x1"], min(ln["x2"], n - 1)],
+                    [ln["y1"], ln["y2"]],
+                    pen=pg.mkPen("#00B4D8", width=1.1))
+                items.append(it)
+            lbl = pg.TextItem("Gann 1x1/1x2/2x1", anchor=(0, 0),
+                              color="#00B4D8", fill=pg.mkBrush(0, 0, 0, 160))
+            lbl.setPos(xa, a["y"])
+            items.append(lbl)
+        elif mode == "pitchfork":
+            from core.drawings_advanced import pitchfork
+            pts = [(lx(data[0]["x"]), data[0]["y"]),
+                   (lx(data[1]["x"]), data[1]["y"]),
+                   (lx(data[2]["x"]), data[2]["y"])]
+            if not all(0 <= x < n for x, _ in pts):
+                return []
+            pf = pitchfork(*[{"x": x, "y": y} for x, y in pts])
+            styles = [("#BB6BD9", 1.4), ("#00C853", 1.1), ("#FF1744", 1.1)]
+            for (p1, p2), (color, w) in zip(
+                    (pf["median"], pf["upper"], pf["lower"]), styles):
+                it = pg.PlotDataItem(
+                    [p1["x"], min(p2["x"], n - 1)], [p1["y"], p2["y"]],
+                    pen=pg.mkPen(color, width=w, style=Qt.PenStyle.DashLine))
+                items.append(it)
+        elif mode == "harmonic":
+            from core.drawings_advanced import harmonic_abcd
+            pts = [(lx(data[0]["x"]), data[0]["y"]),
+                   (lx(data[1]["x"]), data[1]["y"]),
+                   (lx(data[2]["x"]), data[2]["y"])]
+            if not all(0 <= x < n for x, _ in pts):
+                return []
+            h = harmonic_abcd(*[{"x": x, "y": y} for x, y in pts])
+            for v in h.get("variants", []):
+                if v.get("y") is None:
+                    continue
+                ln = pg.InfiniteLine(angle=0, pos=v["y"],
+                                     pen=pg.mkPen("#FFA726", width=1,
+                                                  style=Qt.PenStyle.DashLine))
+                lbl = pg.TextItem(f"D {v['label']} {v['y']:.2f}", anchor=(0, 1),
+                                  color="#FFA726", fill=pg.mkBrush(0, 0, 0, 160))
+                lbl.setPos(pts[2][0], v["y"])
+                items += [ln, lbl]
+            if h.get("potential_d") and h["potential_d"].get("x") is not None:
+                xd = int(h["potential_d"]["x"])
+                if 0 <= xd < n:
+                    dot = pg.ScatterPlotItem(
+                        x=[xd], y=[h["potential_d"]["y"]],
+                        size=9, brush=pg.mkBrush("#FFA726"))
+                    items.append(dot)
+        elif mode == "elliott":
+            from core.drawings_advanced import elliott_projection
+            pts = [(lx(data[i]["x"]), data[i]["y"]) for i in range(len(data))]
+            if not all(0 <= x < n for x, _ in pts):
+                return []
+            e = elliott_projection([{"x": x, "y": y} for x, y in pts])
+            if e.get("target") and e["target"].get("x") is not None:
+                xt = int(e["target"]["x"])
+                for tag, key in (("5浪目标低", "y_lo"), ("5浪目标高", "y_hi")):
+                    yv = e["target"].get(key)
+                    if yv is None:
+                        continue
+                    ln = pg.InfiniteLine(angle=0, pos=yv,
+                                         pen=pg.mkPen("#00E5FF", width=1,
+                                                      style=Qt.PenStyle.DotLine))
+                    lbl = pg.TextItem(f"{tag} {yv:.2f}", anchor=(0, 1),
+                                      color="#00E5FF", fill=pg.mkBrush(0, 0, 0, 160))
+                    lbl.setPos(xt if 0 <= xt < n else n - 1, yv)
+                    items += [ln, lbl]
         return items
 
     def _restore_drawings(self) -> None:
@@ -417,8 +518,9 @@ class ChartTab(QWidget):
         self._favs: set = set(favs)
         for k, b in self.tool_btns.items():
             star = "⭐ " if k in self._favs else ""
-            b.setText(f"{star}" + {"trend": "↗ 趋势线", "hlevel": "— 水平线",
-                                    "fib": "≋ 斐波那契", "rect": "▭ 矩形"}[k])
+            # 标签从按钮文本去掉星标前缀复用，避免字典重复
+            label = b.text().replace("⭐ ", "")
+            b.setText(f"{star}{label}")
             b.setToolTip(("⭐ 已收藏，右键取消收藏；" if k in self._favs else "右键收藏；")
                          + b.toolTip())
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtWidgets import (QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                              QListWidget, QListWidgetItem, QPushButton,
                              QSplitter, QTextEdit, QVBoxLayout, QWidget)
@@ -39,6 +39,30 @@ def _span(text: str, color: str) -> str:
     return f'<span style="color:{color}">{text}</span>'
 
 
+class _VoiceThread(QThread):
+    """后台录音 + 语音识别（不阻塞 UI）。依赖 SpeechRecognition + pyaudio（手动安装）。"""
+
+    result = pyqtSignal(str)
+
+    def run(self) -> None:
+        try:
+            import speech_recognition as sr
+        except Exception:  # noqa: BLE001
+            self.result.emit("__NEED_INSTALL__")
+            return
+        try:
+            r = sr.Recognizer()
+            with sr.Microphone() as src:
+                r.adjust_for_ambient_noise(src, duration=0.5)
+                audio = r.listen(src, timeout=6, phrase_time_limit=12)
+            text = r.recognize_google(audio, language="zh-CN")
+            self.result.emit(text)
+        except sr.UnknownValueError:
+            self.result.emit("__NOT_RECOGNIZED__")
+        except Exception as e:  # noqa: BLE001
+            self.result.emit(f"__ERR__{str(e)[:80]}")
+
+
 class ChatTab(QWidget):
     """三栏对话式分析视图（模块四：对话式研究入口 + 执行时间线）。"""
     analysis_done = pyqtSignal(str, dict)  # ticker, snapshot
@@ -56,6 +80,7 @@ class ChatTab(QWidget):
         self._ctx_page = page or "对话分析"
         self._ctx_stock = stock or ""
         self.setToolTip(f"上下文：{self._ctx_page}｜股票：{self._ctx_stock or '未选中'}")
+        self._refresh_reco_hint()
 
     # ---------- UI ----------
     def _build(self) -> None:
@@ -102,6 +127,17 @@ class ChatTab(QWidget):
             b.clicked.connect(lambda _=False, t=target: self.request_tab.emit(t))
             quick_row.addWidget(b)
         mv.addLayout(quick_row)
+
+        # 情境感知推荐（模块四：当前股票 → 新闻/财报/同行对比）
+        self.reco_row = QHBoxLayout()
+        self.reco_row.setSpacing(6)
+        mv.addLayout(self.reco_row)
+        self._refresh_reco_hint()
+        # 证据链回溯（模块六：AI 分析完成后 🔗 查看证据）
+        self.evidence_row = QHBoxLayout()
+        self.evidence_row.setSpacing(6)
+        self.evidence_row.addStretch(1)
+        mv.addLayout(self.evidence_row)
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
         self.chat.setHtml(self._welcome())
@@ -126,6 +162,12 @@ class ChatTab(QWidget):
         self.input.setCompleter(self._completer)
         self._load_completer_data()
         input_row.addWidget(self.input)
+        # 语音输入（模块四：需手动安装 SpeechRecognition + pyaudio 解锁）
+        self.btn_voice = QPushButton("🎤")
+        self.btn_voice.setToolTip("语音输入（需安装 SpeechRecognition + pyaudio；点击说出你的问题）")
+        self.btn_voice.setStyleSheet("QPushButton{padding:4px 10px;font-weight:bold;}")
+        self.btn_voice.clicked.connect(self._start_voice)
+        input_row.addWidget(self.btn_voice)
         # 分享（模块七：一键分享分析报告）
         self.btn_share = QPushButton("📤 分享")
         self.btn_share.setToolTip("导出当前分析为 Markdown 并复制到剪贴板")
@@ -174,6 +216,167 @@ class ChatTab(QWidget):
                 items = [f"{s['code']} {s['name']}" for s in stocks]
                 self._completer.setModel(QStringListModel(items, self._completer))
         except Exception:
+            pass
+
+    # ---------- 情境感知推荐（模块四） ----------
+    def _refresh_reco_hint(self) -> None:
+        """刷新推荐行：按当前上下文股票给出新闻/财报/同行对比入口。"""
+        from PyQt6.QtWidgets import QPushButton as _PB
+        while self.reco_row.count():
+            it = self.reco_row.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        if not self._ctx_stock:
+            _lbl = QLabel("💡 选中一只股票后，这里会给出该股的新闻 / 财报 / 同行对比推荐")
+            _lbl.setStyleSheet("color:#6B7488;")
+            self.reco_row.addWidget(_lbl)
+            return
+        stock = self._ctx_stock
+        for label, tip, fn in (
+            ("📰 相关新闻", f"查看 {stock} 的最新新闻", self._reco_news),
+            ("📑 财报速览", f"查看 {stock} 的基本面/财报要点", self._reco_fundamental),
+            ("🏭 同行对比", f"对比 {stock} 的同行表现", self._reco_peers),
+        ):
+            b = _PB(label)
+            b.setToolTip(tip)
+            b.setStyleSheet(
+                "QPushButton{padding:4px 10px; border-radius:8px; font-size:12px;"
+                "background:rgba(19,23,34,0.85); border:1px solid rgba(0,180,216,0.25); color:#7FD8F2;}"
+                "QPushButton:hover{border:1px solid #00B4D8; color:#00B4D8;}")
+            b.clicked.connect(lambda _=False, f=fn: f())
+            self.reco_row.addWidget(b)
+
+    def _reco_news(self) -> None:
+        """推荐①：相关新闻（客观展示，含来源）。"""
+        stock = self._ctx_stock or ""
+        if not stock:
+            return
+        self._say(f"<div style='color:#8b949e'>📰 {stock} 相关新闻加载中…</div>")
+        try:
+            from core.data import service
+            news = service.get_news(stock, per_symbol_limit=5) or []
+        except Exception as e:  # noqa: BLE001
+            self._say(f"<div style='color:#FFA726'>新闻加载失败：{str(e)[:100]}</div>")
+            return
+        if not news:
+            self._say("<div style='color:#8b949e'>暂无相关新闻（数据源不可达或该股无近期新闻）。</div>")
+            return
+        parts = [f"<div style='color:#E6EDF3; font-weight:bold;'>📰 {stock} 相关新闻（{len(news)} 条）</div>"]
+        for n in news[:5]:
+            title = n.get("title") or n.get("headline") or ""
+            src = n.get("source") or n.get("media") or "新闻源"
+            date = n.get("date") or n.get("publish_time") or n.get("time") or ""
+            parts.append(
+                f"<div style='margin:4px 0;'><b>{title}</b><br/>"
+                f"<span style='color:#8b949e'>{src} · {date}</span></div>")
+        parts.append("<div style='color:#6B7488; font-size:12px;'>以上为客观新闻列表，不代表任何投资立场。</div>")
+        self._say("".join(parts))
+
+    def _reco_fundamental(self) -> None:
+        """推荐②：财报/基本面速览（确定性规则输出）。"""
+        stock = self._ctx_stock or ""
+        if not stock:
+            return
+        self._say(f"<div style='color:#8b949e'>📑 {stock} 基本面速览加载中…</div>")
+        try:
+            from core.fundamental_analyzer import analyze_fundamentals, render_fundamental_card
+            fa = analyze_fundamentals(stock)
+            if fa.get("ok") is False or not fa:
+                self._say(f"<div style='color:#FFA726'>基本面数据不足：{fa.get('error', '数据源不可达')}</div>")
+                return
+            self._say(render_fundamental_card(fa))
+        except Exception as e:  # noqa: BLE001
+            self._say(f"<div style='color:#FFA726'>基本面分析失败：{str(e)[:100]}</div>")
+
+    def _reco_peers(self) -> None:
+        """推荐③：同行对比（按同行业筛选 A股，确定性结果）。"""
+        stock = self._ctx_stock or ""
+        if not stock:
+            return
+        self._say(f"<div style='color:#8b949e'>🏭 {stock} 同行对比加载中…</div>")
+        try:
+            from core.screener import run_screener, _a_spot
+            spot = _a_spot() or []
+            row = next((r for r in spot if r.get("code") in stock or stock in r.get("code", "")), None)
+            industry = (row or {}).get("industry", "")
+            if not industry:
+                self._say("<div style='color:#8b949e'>未能定位行业（数据源不可达时无法对比）。</div>")
+                return
+            peers = [r for r in spot if r.get("industry") == industry][:6]
+            if not peers:
+                self._say("<div style='color:#8b949e'>该行业暂无成分数据。</div>")
+                return
+            parts = [f"<div style='color:#E6EDF3; font-weight:bold;'>🏭 行业「{industry}」成分表现（{len(peers)} 只）</div>"]
+            for p in peers:
+                chg = float(p.get("chg_pct") or 0)
+                color = "#00C853" if chg > 0 else ("#FF1744" if chg < 0 else "#8b949e")
+                pe = p.get("pe") or "—"
+                mcap = p.get("mcap") or "—"
+                parts.append(
+                    f"<div style='margin:3px 0;'>"
+                    f"<span style='color:#E6EDF3'>{p.get('code')} {p.get('name')}</span> "
+                    f"<span style='color:{color}'>{'%+.2f%%' % chg}</span> "
+                    f"<span style='color:#8b949e'>PE {pe} · 市值 {mcap}</span></div>")
+            parts.append("<div style='color:#6B7488; font-size:12px;'>客观板块数据，非推荐。</div>")
+            self._say("".join(parts))
+        except Exception as e:  # noqa: BLE001
+            self._say(f"<div style='color:#FFA726'>同行对比失败：{str(e)[:100]}</div>")
+
+    # ---------- 语音输入（模块四） ----------
+    def _start_voice(self) -> None:
+        """麦克风录音 → 语音识别 → 填入输入框并触发分析。"""
+        try:
+            import importlib.util
+            if importlib.util.find_spec("speech_recognition") is None:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self, "语音输入",
+                    "语音识别组件未安装。请手动执行：\n\n"
+                    "  pip install SpeechRecognition pyaudio\n\n"
+                    "安装后重启程序即可使用语音输入。")
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        self.btn_voice.setEnabled(False)
+        self.btn_voice.setText("🎤 聆听…")
+        self._voice_thread = _VoiceThread(self)
+        self._voice_thread.result.connect(self._on_voice_result)
+        self._voice_thread.start()
+
+    def _on_voice_result(self, text: str) -> None:
+        self.btn_voice.setEnabled(True)
+        self.btn_voice.setText("🎤")
+        if text == "__NEED_INSTALL__":
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "语音输入",
+                "语音识别组件未安装。请手动执行：\n\n  pip install SpeechRecognition pyaudio")
+            return
+        if text == "__NOT_RECOGNIZED__":
+            self._say("<div style='color:#FFA726'>未识别到语音，请靠近麦克风重试。</div>")
+            return
+        if text.startswith("__ERR__"):
+            self._say(f"<div style='color:#FFA726'>语音识别失败：{text[7:]}</div>")
+            return
+        self.input.setText(text)
+        self._analyze()
+
+    # ---------- 响应式布局（模块四：窄屏自动折叠右栏） ----------
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        try:
+            if self.width() < 980:
+                for i in range(self.layout().count()):
+                    sp = self.layout().itemAt(i).widget()
+                    if isinstance(sp, QSplitter):
+                        sp.widget(2).setVisible(False)  # 折叠右栏 K线
+            else:
+                for i in range(self.layout().count()):
+                    sp = self.layout().itemAt(i).widget()
+                    if isinstance(sp, QSplitter):
+                        sp.widget(2).setVisible(True)
+        except Exception:  # noqa: BLE001
             pass
 
     # ---------- 对话渲染 ----------
@@ -316,6 +519,9 @@ class ChatTab(QWidget):
             self._say(
                 f"<div style='color:#8b949e;font-size:12px'>🧰 工具链：{tools}</div>")
             self._say(f"<div style='line-height:1.7'>{answer}</div>")
+            # 证据链回溯（模块六）：🔗 按钮 → 证据面板
+            eid = result.get("evidence_id")
+            self._show_evidence_button(eid)
             # 若提取到代码，联动右侧 K线
             from agent.agent_core import extract_ticker
             code = extract_ticker(raw)
@@ -332,6 +538,37 @@ class ChatTab(QWidget):
         self._aw.fail.connect(_on_agent_fail)
         self._aw.event.connect(_on_agent_event)
         self._aw.start()
+
+    def _show_evidence_button(self, evidence_id) -> None:
+        """证据链回溯（模块六）：在对话区下方显示 🔗 按钮。"""
+        try:
+            from PyQt6.QtWidgets import QPushButton as _PB
+            while self.evidence_row.count() > 1:  # 保留 stretch
+                it = self.evidence_row.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            if not evidence_id:
+                return
+            b = _PB("🔗 查看证据链")
+            b.setToolTip(f"evidence_id: {evidence_id}")
+            b.setStyleSheet(
+                "QPushButton{padding:4px 12px;border-radius:8px;font-size:12px;"
+                "background:rgba(0,180,216,0.12);border:1px solid rgba(0,180,216,0.35);color:#7FD8F2;}"
+                "QPushButton:hover{border:1px solid #00B4D8;color:#00B4D8;}")
+            b.clicked.connect(
+                lambda _=False, eid=evidence_id: self._open_evidence(eid))
+            self.evidence_row.insertWidget(self.evidence_row.count() - 1, b)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _open_evidence(self, evidence_id: str) -> None:
+        try:
+            from app.ui.evidence_dialog import EvidenceDialog
+            dlg = EvidenceDialog(evidence_id, self)
+            dlg.exec()
+        except Exception as e:  # noqa: BLE001
+            self._say(f"<span style='color:#FFA726'>证据面板打开失败：{str(e)[:80]}</span>")
 
     def _recent_history(self) -> list:
         """最近 6 轮对话记录（供上下文优先级使用）。"""

@@ -84,9 +84,16 @@ class AgentCore:
         if mock is None:
             mock = _is_mock_env()
         self.mock = mock
+        # 模型名（审计留痕用，模块六）
+        self.model_name = ""
+        if llm is not None:
+            self.model_name = (getattr(llm, "model", None)
+                               or getattr(llm, "model_name", None)
+                               or getattr(type(llm), "__name__", "") or "")
         # 模块七：推理事件流（可观测性）
         from agent.agent_events import EventCollector
         self.events = EventCollector()
+        self._last_review_id: str | None = None
 
     def set_event_callback(self, cb) -> None:
         """注册事件回调（如 PyQt 信号桥），实时推送 THINKING/TOOL_CALL/…。"""
@@ -222,6 +229,21 @@ class AgentCore:
         }
         if compliance["blocked"]:
             answer += "\n\n⚠️ 检测到敏感话术，已按合规规则标注，输出仅供参考，不构成投资建议。"
+        # AI 评审员（输出前独立审核：承诺收益/无风险/荐股/内幕/免责声明）
+        try:
+            from security.ai_reviewer import review_output
+            review = review_output(answer)
+            compliance["ai_review"] = {
+                "passed": review["passed"], "score": review["score"],
+                "issues": [f"{i['label']}:{i['keyword']}" for i in review["issues"]],
+                "disclaimer_ok": review["disclaimer_ok"],
+            }
+            if not review["passed"]:
+                answer += (f"\n\n🔎 合规评审：{review['score']}/100，"
+                           f"提示 {len(review['issues'])} 项（{'、'.join(i['label'] for i in review['issues'][:3])}），"
+                           f"输出仅供参考，不构成投资建议。")
+        except Exception as e:  # noqa: BLE001
+            log.debug("AI 评审员不可用：%s", e)
         self.events.emit(EventType.FINAL_REPORT, "报告已生成", blocked=compliance["blocked"])
         # 记录到决策日志
         self._log_decision(user_input, plan, results, answer, compliance)
@@ -248,6 +270,7 @@ class AgentCore:
                 "final": {"action": "分析完成", "summary": answer[:300]},
             })
         except Exception as e:  # noqa: BLE001
+            _aid = None
             log.debug("证据链登记失败：%s", e)
         return {
             "plan": [{"tool": s["tool"], "kwargs": s["kwargs"]} for s in plan],
@@ -255,6 +278,7 @@ class AgentCore:
             "answer": answer,
             "compliance": compliance,
             "events": self.events.snapshot(),
+            "evidence_id": _aid,  # 供 UI 🔗 证据链回溯
         }
 
     # ---------------- 回复合成 ----------------
@@ -356,15 +380,24 @@ class AgentCore:
 
     # ---------------- 记忆 ----------------
     def _log_decision(self, user_input, plan, results, answer, compliance) -> None:
-        """写入审计链（AI 输出留痕）+ 长期记忆（摘要沉淀）。"""
+        """写入审计链（AI 输出留痕，含模型/合规过滤结果）+ 长期记忆。"""
         try:
             from security.audit_ledger import append
             plan_txt = "→".join(s["tool"] for s in plan) or "none"
+            model = getattr(self, "model_name", None) or ""
+            review = compliance.get("ai_review") or {}
             append(actor="ai", action="agent_analysis",
-                   detail=f"[{plan_txt}] {user_input[:80]} :: {answer[:120]}")
+                   detail=(f"[{plan_txt}] 模型={model} "
+                           f"评审={review.get('score', '—')}/100 "
+                           f"通过={review.get('passed', '—')} :: "
+                           f"{user_input[:60]} :: {answer[:100]}"))
         except Exception as e:  # noqa: BLE001
             log.debug("审计写入失败：%s", e)
+        # 长期记忆（模块二 Human-in-the-loop）：
+        #   strict 模式：未经人类审校不得写入知识库；
+        #   auto 模式（默认）：自动写入并同时创建审校记录供 UI 审校。
         try:
+            from core.human_review import ReviewGate
             from core.memory.long_term import save_analysis
             ticker = extract_ticker(user_input) or ""
             price = None
@@ -374,9 +407,15 @@ class AgentCore:
                     price = float(d["close"])
                     break
             if ticker and price is not None:
-                save_analysis(ticker=ticker, name=ticker, price=price,
-                              chg_pct=0.0, rsi=None, macd_signal="",
-                              summary=answer[:200], source="agent")
+                gate = ReviewGate()
+                rec = gate.create(answer, {"ticker": ticker,
+                                           "trigger": user_input[:60]})
+                strict = _review_mode() == "strict"
+                if (not strict and ticker) or gate.can_commit(rec.review_id):
+                    save_analysis(ticker=ticker, name=ticker, price=price,
+                                  chg_pct=0.0, rsi=None, macd_signal="",
+                                  summary=answer[:200], source="agent")
+                self._last_review_id = rec.review_id
         except Exception as e:  # noqa: BLE001
             log.debug("长期记忆写入失败：%s", e)
 
@@ -384,3 +423,9 @@ class AgentCore:
 def _is_mock_env() -> bool:
     import os
     return os.environ.get("STOCKAI_MOCK", "0") == "1"
+
+
+def _review_mode() -> str:
+    """human_review 审校模式：auto（默认自动写库+留记录）/ strict（审校后才写）。"""
+    import os
+    return os.environ.get("STOCKAI_REVIEW", "auto")

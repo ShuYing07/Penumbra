@@ -97,7 +97,8 @@ def retrieve_similar(query: str, top_k: int = 5) -> list[dict]:
     scored.sort(key=lambda x: x[0], reverse=True)
     out = []
     for s, r in scored[:top_k]:
-        out.append({"text": r["text"], "meta": json.loads(r["meta"]),
+        out.append({"doc_id": r["doc_id"], "text": r["text"],
+                    "meta": json.loads(r["meta"]),
                     "score": round(s, 3), "engine": "sqlite-hash"})
     return out
 

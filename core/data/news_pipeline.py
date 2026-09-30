@@ -209,26 +209,9 @@ def fetch_research_reports(stock_code: str, limit: int = 10) -> list[dict]:
 
 
 def analyze_news_sentiment(text: str) -> str:
-    """简单规则情感分析：利好/利空/中性。"""
-    return _simple_sentiment(text)
-
-
-def _simple_sentiment(text: str) -> str:
-    """基于关键词的简单情感判断。"""
-    bullish = ["增长", "利好", "超预期", "盈利", "突破", "上涨", "回购", "增持", "分红", "签约", "中标"]
-    bearish = ["下滑", "利空", "亏损", "违规", "处罚", "下跌", "减持", "退市", "风险", "诉讼", "违约"]
-    score = 0
-    for w in bullish:
-        if w in text:
-            score += 1
-    for w in bearish:
-        if w in text:
-            score -= 1
-    if score > 0:
-        return "利好"
-    elif score < 0:
-        return "利空"
-    return "中性"
+    """简单规则情感分析：利好/利空/中性（委托 core.sentiment 轻量实现）。"""
+    from core.sentiment import analyze_sentiment
+    return analyze_sentiment(text)
 
 
 def get_all_news(stock_code: str) -> dict:

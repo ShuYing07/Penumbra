@@ -23,8 +23,10 @@ def test_market_of_hk():
     assert market_of("0700.HK") == "HK"
     assert market_of("00700.HK") == "HK"     # 5 位数字
     assert market_of("02800.HK") == "HK"
-    # 其他后缀仍落 GLOBAL
-    assert market_of("7203.T") == "GLOBAL"
+    # 多市场：日股/韩股/台股现明确识别（本轮扩展）
+    assert market_of("7203.T") == "JP"
+    assert market_of("005930.KS") == "KR"
+    assert market_of("2330.TW") == "TW"
     assert market_of("AAPL") == "US"
     assert market_of("BTC-USD") == "CRYPTO"
     assert market_of("SH600519") == "CN"

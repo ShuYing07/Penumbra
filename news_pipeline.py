@@ -27,23 +27,9 @@ def _conn() -> sqlite3.Connection:
 
 
 def analyze_news_sentiment(text: str) -> str:
-    """简单规则情感分析：利好/利空/中性。"""
-    bullish = ["上涨", "增长", "盈利", "利好", "突破", "增持", "回购",
-               "超预期", "受益", "中标", "签约", "投产", "获奖", "创新高"]
-    bearish = ["下跌", "亏损", "利空", "减持", "处罚", "违规", "立案",
-               "下调", "退市", "跌停", "爆雷", "诉讼", "失败", "下滑"]
-    score = 0
-    for w in bullish:
-        if w in text:
-            score += 1
-    for w in bearish:
-        if w in text:
-            score -= 1
-    if score > 0:
-        return "利好"
-    if score < 0:
-        return "利空"
-    return "中性"
+    """简单规则情感分析：利好/利空/中性（委托 core.sentiment 轻量实现）。"""
+    from core.sentiment import analyze_sentiment
+    return analyze_sentiment(text)
 
 
 def _cache_valid(key: str, ttl_hours: float) -> list[dict]:

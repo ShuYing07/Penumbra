@@ -162,8 +162,9 @@ class WatchlistTab(QWidget):
         ]
         for c, val in enumerate(vals):
             cell = QTableWidgetItem(str(val))
-            if c == 3 and chg is not None:               # 涨跌色：涨红跌绿
-                cell.setForeground(QColor("#c0392b" if chg >= 0 else "#1e8449"))
+            if c == 3 and chg is not None:               # 涨跌色：A股红涨绿跌（统一惯例）
+                from app.ui.ui_theme import down_color, up_color
+                cell.setForeground(QColor(up_color() if chg >= 0 else down_color()))
             if c == 5:                                    # 状态色
                 cell.setForeground(QColor(_STATUS_COLOR.get(val, "#000000")))
             if not enabled and c in (0,):

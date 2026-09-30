@@ -16,14 +16,15 @@ from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 from app.ui.main_window import MainWindow, NAV_GROUPS
 
+TOTAL = 36
 w = MainWindow()
-assert w.tabs.count() == 27, f"期望 27 个 tab（0-26），实际 {w.tabs.count()}"
+assert w.tabs.count() == TOTAL, f"期望 {TOTAL} 个 tab（0-{TOTAL-1}），实际 {w.tabs.count()}"
 # 懒加载占位页存在
-for i in range(5, 27):
+for i in range(5, TOTAL):
     assert i in w._lazy_tabs and i not in w._created
 
 # 逐页点击：目标页必须保持激活（修复『点功能弹K线』）
-for i in range(5, 27):
+for i in range(5, TOTAL):
     w.tabs.setCurrentIndex(0)
     w._on_tab_changed(i)  # 手动触发懒加载（等价于点击导航）
     w.tabs.setCurrentIndex(i)
@@ -34,21 +35,19 @@ for i in range(5, 27):
 # 再回首页，确认没有残留跳页
 w.tabs.setCurrentIndex(0)
 assert w.tabs.currentIndex() == 0
-print(f"[ok] 27 个 tab 全部就位；懒加载页 {list(w._created.keys())} 均保持目标页激活")
+print(f"[ok] {TOTAL} 个 tab 全部就位；懒加载页 {list(w._created.keys())} 均保持目标页激活")
 
-# 导航分组覆盖：每个 tab 都有导航入口（0-26 全覆盖）
+# 导航分组覆盖：每个 tab 都有导航入口（0-{TOTAL-1} 全覆盖）
 nav_idx = {idx for _g, items in NAV_GROUPS for _l, idx in items}
-missing = set(range(27)) - nav_idx
+missing = set(range(TOTAL)) - nav_idx
 assert not missing, f"无导航入口的 tab：{missing}"
-print(f"[ok] 导航分组覆盖全部 27 个 tab（发现/研究/验证/积累/系统）")
+print(f"[ok] 导航分组覆盖全部 {TOTAL} 个 tab（发现/研究/验证/积累/系统）")
 
-# 基本面/组合优化/数据质量/系统健康等新页导入即建
-w._on_tab_changed(23)  # 组合优化
-w._on_tab_changed(24)  # 基本面
-w._on_tab_changed(25)  # 数据质量
-w._on_tab_changed(26)  # 系统健康
-assert 23 in w._created and 24 in w._created
-assert 25 in w._created and 26 in w._created
-print("[ok] 组合优化(23) / 基本面(24) / 数据质量(25) / 系统健康(26) 可实例化")
+# 新页导入即建
+for idx in (23, 24, 25, 26, 27, 28, 29, 30):
+    w._on_tab_changed(idx)
+    assert idx in w._created, f"tab {idx} 未创建"
+print("[ok] 组合优化(23) / 基本面(24) / 数据质量(25) / 系统健康(26) / "
+      "多模态(27) / 实时流(28) / 合规测试(29) / 插件管理(30) 可实例化")
 
 print("\nALL PASS")

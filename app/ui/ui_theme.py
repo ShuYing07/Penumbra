@@ -69,6 +69,43 @@ def set_theme(name: str) -> None:
         _current = name
 
 
+# ---------------------------------------------------------------------------
+# 涨跌色惯例（模块四 · 参考 Libra Design / Kepler Mobile）
+# ---------------------------------------------------------------------------
+# a_share：红涨绿跌（A股惯例，任务书要求组件一致体现）
+# global ：绿涨红跌（国际惯例）
+_UP_DOWN_CONVENTION: str = "a_share"
+
+# A股惯例色（独立于主题色，任何主题下语义不变）
+UP_A_SHARE = "#FF5252"    # 红涨
+DOWN_A_SHARE = "#26A69A"  # 绿跌
+
+# 国际惯例色（兼容旧模块 / 海外市场页面）
+UP_GLOBAL = THEMES["dark"]["up"]     # #00C853
+DOWN_GLOBAL = THEMES["dark"]["down"]  # #FF1744
+
+
+def set_convention(name: str) -> None:
+    """设置涨跌色惯例：a_share（红涨绿跌，默认）或 global（绿涨红跌）。"""
+    global _UP_DOWN_CONVENTION
+    if name in ("a_share", "global"):
+        _UP_DOWN_CONVENTION = name
+
+
+def get_convention() -> str:
+    return _UP_DOWN_CONVENTION
+
+
+def up_color() -> str:
+    """当前惯例下的上涨色。"""
+    return UP_A_SHARE if _UP_DOWN_CONVENTION == "a_share" else UP_GLOBAL
+
+
+def down_color() -> str:
+    """当前惯例下的下跌色。"""
+    return DOWN_A_SHARE if _UP_DOWN_CONVENTION == "a_share" else DOWN_GLOBAL
+
+
 # 保持向后兼容的模块级常量（默认暗色值，旧模块直接 import）
 BG_MAIN = THEMES["dark"]["bg_main"]
 BG_CARD = THEMES["dark"]["bg_card_solid"]

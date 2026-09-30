@@ -1,0 +1,7 @@
+{
+  "name": "export_plugin",
+  "version": "0.1.0",
+  "author": "疏影雅集",
+  "description": "扩展导出格式：将分析报告导出为 HTML / CSV。",
+  "permissions": ["file_write"]
+}

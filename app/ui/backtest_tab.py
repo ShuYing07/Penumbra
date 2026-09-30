@@ -369,6 +369,34 @@ class BacktestTab(QWidget):
                               m_in.get('total_return_pct') is not None and
                               float(m_out['total_return_pct']) < float(m_in['total_return_pct']) * 0.5)
                              else "样本内外表现接近 → 稳健性较好"))
+            rb = audit.get("robust") or {}
+            if "error" in rb:
+                rows.append(("稳健性指标", rb["error"]))
+            elif rb:
+                g = rb.get("gt_score") or {}
+                rows.append(("GT-Score", f"{g.get('gt_score', '—')} / 100"
+                            + (f"（绩效 {g.get('perf_term', 0):.0f} · 显著性 {g.get('significance_term', 0):.0f}"
+                               f" · 一致性 {g.get('consistency_term', 0):.0f}"
+                               f" · 下行惩罚 {g.get('downside_penalty', 0):.0f}）"
+                               if g.get('gt_score') is not None else "")))
+                rows.append(("Sharpe 稳定性",
+                             f"{rb.get('sharpe_stability', '—')}（0~1，越接近1越稳定）"))
+                ls = rb.get("long_short") or {}
+                if ls.get("n_rounds"):
+                    rows.append(("多空统计",
+                                 f"{ls.get('n_rounds', 0)} 回合 · 胜率 {ls.get('win_rate_pct', 0)}% · "
+                                 f"平均 {ls.get('avg_return_pct', 0)}% · "
+                                 f"最大盈 {ls.get('max_win_pct', 0)}% / 最大亏 {ls.get('max_loss_pct', 0)}% · "
+                                 f"极端 {ls.get('extreme_rounds', 0)} 次"))
+                hd = rb.get("holding") or {}
+                if hd.get("total_days"):
+                    rows.append(("持仓统计（套牢/踏空）",
+                                 f"持仓 {hd.get('position_days', 0)} 天 / 空仓 {hd.get('flat_days', 0)} 天 · "
+                                 f"套牢(浮亏>{hd.get('trapped_threshold_pct', 5)}%) {hd.get('trapped_days', 0)} 天 "
+                                 f"({hd.get('trapped_ratio_pct', 0)}%) · "
+                                 f"踏空 {hd.get('missed_segments', 0)} 段"
+                                 + (f"（基准累计涨 {hd.get('missed_bench_pct', 0)}%）"
+                                    if hd.get('missed_bench_pct') else "")))
         self.audit_table.setRowCount(len(rows))
         for r, (k, v) in enumerate(rows):
             self.audit_table.setItem(r, 0, QTableWidgetItem(k))

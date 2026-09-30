@@ -107,6 +107,7 @@ class BacktestResult:
     equity: pd.DataFrame              # date(index) strategy/benchmark/cash/market_value
     trades: pd.DataFrame              # 成交流水
     metrics: dict = field(default_factory=dict)
+    rounds: list = field(default_factory=list)       # 已平仓回合 {pnl, hold_days}
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +366,8 @@ def run_backtest(df: pd.DataFrame, market: str, strategy: str,
                     "slippage_bps": fee.slippage_bps}}
     return BacktestResult(ticker=cfg.ticker, market=market, strategy=strategy,
                           params=params, config_snapshot=snap,
-                          equity=equity, trades=trades, metrics=metrics)
+                          equity=equity, trades=trades, metrics=metrics,
+                          rounds=rounds)
 
 
 # ---------------------------------------------------------------------------
