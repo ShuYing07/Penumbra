@@ -11,7 +11,8 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLa
 
 from app.ui.local_model_dialog import LocalModelDialog
 from core import llm_local
-from core.agents.graph import NODE_LABELS, run_analysis
+# （顶层不 import core.agents.graph——langgraph 较重会拖慢启动 ~0.9s，
+#  run_analysis/NODE_LABELS 均在用时经局部 import / _node_keys() 获取）
 from core.config import REPORT_DIR
 from core.llm import LLMRunner
 from core.memory.reflection import evaluate_pending
@@ -22,8 +23,17 @@ _BACKENDS = [("云端 DeepSeek（质量高）", "deepseek"),
              ("本地模型（完全离线·免费）", "local"),
              ("自动（云端失败切本地）", "auto")]
 
-_NODE_KEYS = list(NODE_LABELS)
+_NODE_KEYS: list[str] | None = None
 _LOG_LIMIT = 200  # 采集日志最多保留行数
+
+
+def _node_keys() -> list[str]:
+    """延迟获取分析节点键（避免顶层 import langgraph 拖慢启动 ~0.9s）。"""
+    global _NODE_KEYS
+    if _NODE_KEYS is None:
+        from core.agents.graph import NODE_LABELS
+        _NODE_KEYS = list(NODE_LABELS)
+    return _NODE_KEYS
 
 
 class AnalysisWorker(QThread):
@@ -73,6 +83,7 @@ class AnalysisWorker(QThread):
                 self.node_done.emit(node_key, degraded)
 
         try:
+            from core.agents.graph import run_analysis  # 延迟：不拖慢启动
             result = run_analysis(self.ticker, runner=runner, progress_cb=cb)
             self.ok.emit(result)
         except Exception as e:  # noqa: BLE001
@@ -159,8 +170,9 @@ class AnalysisTab(QWidget):
         v.addLayout(bottom)
 
     def _reset_progress(self) -> None:
+        from core.agents.graph import NODE_LABELS  # 延迟 import
         self.progress.clear()
-        for key in _NODE_KEYS:
+        for key in _node_keys():
             self.progress.addItem(f"⏳ {NODE_LABELS[key]}")
 
     # ---------------- 流程 ----------------
@@ -227,12 +239,13 @@ class AnalysisTab(QWidget):
     def _on_stage(self, text: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.progress.addItem(f"· {stamp} {text}")
-        while self.progress.count() > _LOG_LIMIT + len(_NODE_KEYS):
-            self.progress.takeItem(len(_NODE_KEYS))
+        while self.progress.count() > _LOG_LIMIT + len(_node_keys()):
+            self.progress.takeItem(len(_node_keys()))
 
     @pyqtSlot(str, bool)
     def _on_node(self, key: str, degraded: bool) -> None:
-        idx = _NODE_KEYS.index(key)
+        from core.agents.graph import NODE_LABELS  # 延迟 import
+        idx = _node_keys().index(key)
         mark = "⚠️" if degraded else "✅"
         self.progress.item(idx).setText(f"{mark} {NODE_LABELS[key]}")
 

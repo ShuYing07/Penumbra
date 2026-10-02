@@ -297,6 +297,7 @@ def main() -> int:
         app.setWindowIcon(_QIcon(_ico))
     try:
         from app.ui.ui_theme import apply_theme
+        # 纯玻璃拟态：无背景图片（2026-10 按用户要求移除图片融合）
         apply_theme(app)
     except Exception:
         try:

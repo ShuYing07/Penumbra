@@ -516,12 +516,43 @@ class ChatTab(QWidget):
             plan = result.get("plan") or []
             tools = " → ".join(p["tool"] for p in plan) or "（无工具调用）"
             answer = result.get("answer") or ""
+            # AI-vs-AI 合规评审（输出前独立审核）：命中 high 级规则或缺少
+            # 免责声明时，附加拦截说明；LLM 评审可选启用（失败自动降级规则）。
+            try:
+                from security.ai_reviewer import review_output
+                _rv = review_output(answer, use_llm=False)
+                if not _rv.get("passed"):
+                    _notes = "；".join(i.get("label", "") for i in _rv.get("issues", [])[:3])
+                    answer = answer + (f"\n\n⚠️ [合规拦截] 输出未通过独立评审：{_notes}。"
+                                       f"（{_rv.get('score', 0)} 分）")
+            except Exception:  # noqa: BLE001
+                pass
             self._say(
                 f"<div style='color:#8b949e;font-size:12px'>🧰 工具链：{tools}</div>")
             self._say(f"<div style='line-height:1.7'>{answer}</div>")
             # 证据链回溯（模块六）：🔗 按钮 → 证据面板
             eid = result.get("evidence_id")
             self._show_evidence_button(eid)
+            # 自主学习闭环（2026-10）：分析完成后自动沉淀经验，失败静默
+            try:
+                from core.agents import evo_memory
+                _kinds = {"财报": "财报", "估值": "估值", "K线": "技术",
+                          "指标": "技术", "新闻": "新闻", "宏观": "宏观"}
+                _kind = next((v for k, v in _kinds.items()
+                              if k in (plan and " ".join(p.get("tool", "")
+                                                         for p in plan) or "")),
+                             "通用")
+                _verdict = "看多" if any(w in answer for w in ("看多", "买入", "偏多")) \
+                    else ("看空" if any(w in answer for w in ("看空", "卖出", "偏空"))
+                          else "中性")
+                evo_memory.analyze_reflect({
+                    "kind": _kind, "ticker": extract_ticker(raw) or "",
+                    "verdict": _verdict,
+                    "confidence": float(result.get("confidence") or 0.5),
+                    "model_engine": str(result.get("engine") or ""),
+                    "summary": answer[:200]})
+            except Exception:  # noqa: BLE001
+                pass
             # 若提取到代码，联动右侧 K线
             from agent.agent_core import extract_ticker
             code = extract_ticker(raw)

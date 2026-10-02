@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import math
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QPainter, QFont
 from PyQt6.QtWidgets import QWidget
 
@@ -62,10 +62,34 @@ class SectorTreemap(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        items = _fetch_sectors() or _demo_sectors()
-        self._items = items
+        """异步刷新（启动优化 2026-10）：先画演示骨架保证 UI 立即可见，
+        后台线程拉取 AKShare 板块行情，返回后经 QTimer 回主线程更新。
+        避免构造/刷新时同步网络请求阻塞启动（此前板块请求耗时约 7s）。"""
+        self._items = _demo_sectors()
         self._layout()
         self.update()
+        if getattr(self, "_fetching", False):
+            return
+        self._fetching = True
+
+        def _run() -> None:
+            try:
+                items = _fetch_sectors()
+            except Exception:  # noqa: BLE001
+                items = []
+            if items:
+                QTimer.singleShot(0, lambda: self._apply(items))
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply(self, items: list[dict]) -> None:
+        """主线程应用异步取数结果（避免跨线程改 UI）。"""
+        self._fetching = False
+        if items:
+            self._items = items
+            self._layout()
+            self.update()
 
     # ---------- 布局：简单 squarified 矩形树图 ----------
     def _layout(self) -> None:

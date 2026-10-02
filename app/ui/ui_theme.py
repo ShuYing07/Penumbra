@@ -17,17 +17,17 @@ from pathlib import Path
 THEMES: dict[str, dict[str, str]] = {
     "dark": {
         "name": "暗色 · 玻璃态",
-        "bg_main": "#0A0E17",          # 主背景（深空黑）
-        "bg_card": "rgba(19,23,34,0.88)",  # 玻璃拟态卡片
-        "bg_card_solid": "#131722",    # 卡片实体色（表格等需不透明背景的场景）
+        "bg_main": "#0A0C10",          # 主背景（深空黑，对标顶尖终端）
+        "bg_card": "rgba(20,24,32,0.82)",  # 玻璃拟态卡片（半透明，叠于背景图之上）
+        "bg_card_solid": "#141820",    # 卡片实体色（表格等需不透明背景的场景）
         "bg_hover": "#1A2030",
         "border": "#1E2530",
-        "border_glow": "rgba(0,229,255,0.15)",
+        "border_glow": "rgba(0,180,216,0.16)",
         "text_main": "#E6EDF3",
         "text_sub": "#8B949E",
         "up": "#00C853",
         "down": "#FF1744",
-        "accent": "#00E5FF",
+        "accent": "#00B4D8",
         "warn": "#FFA726",
         "shadow": "rgba(0,0,0,0.4)",
     },
@@ -50,6 +50,19 @@ THEMES: dict[str, dict[str, str]] = {
 }
 
 _current: str = "dark"
+# 背景图已按用户要求移除（2026-10）：程序改为纯玻璃拟态。
+# 保留 set_bg_image/bg_image 仅为向后兼容（无任何视觉效果）。
+_BG_IMAGE: str = ""
+
+
+def set_bg_image(path: str = "") -> None:
+    """（已弃用）历史上用于设置全局背景图。纯玻璃拟态下无效果，仅保留兼容。"""
+    global _BG_IMAGE
+    _BG_IMAGE = path if path else ""
+
+
+def bg_image() -> str:
+    return _BG_IMAGE
 
 
 def current_theme() -> str:
@@ -150,7 +163,6 @@ QMainWindow, QDialog {{
     font-family: {FONT_FAMILY};
     font-size: {FONT_SIZE_BASE}px;
 }}
-
 QWidget {{ color: {text}; font-family: {FONT_FAMILY}; }}
 
 /* 卡片：玻璃拟态（半透明背景 + 细边框 + 大圆角） */

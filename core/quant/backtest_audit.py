@@ -41,8 +41,11 @@ def backtest_audit(df: pd.DataFrame, market: str, strategy: str,
     items: list[dict] = []
 
     # ---- 致命：未来函数 / 前视偏差 ----
+    # 注意：scan_lookahead 返回 {verdict: pass/suspect/fail/na}，无 passed 字段；
+    # 误读 passed 会令本项永远假阳性（critical）。
     la = scan_lookahead(df, strategy, params)
-    la_passed = bool(la.get("passed"))
+    la_verdict = la.get("verdict", "na")
+    la_passed = la_verdict in ("pass", "na")
     items.append({
         "level": "critical" if not la_passed else "info",
         "name": "未来函数 / 前视偏差（scan_lookahead）",
@@ -51,8 +54,9 @@ def backtest_audit(df: pd.DataFrame, market: str, strategy: str,
     })
 
     # ---- 高危：过拟合 / 样本外退化 ----
+    # 注意：walk_forward 需 market/strategy/params 三参，缺参会令本项永远假阳性。
     try:
-        wf = walk_forward(df, in_ratio=0.6)
+        wf = walk_forward(df, market, strategy, params, config, in_ratio=0.6)
         oos = wf.get("oos") or {}
         is_ = wf.get("in") or {}
         oos_ret = float(oos.get("annual_return", 0.0) or 0.0)

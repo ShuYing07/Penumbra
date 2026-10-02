@@ -1,0 +1,50 @@
+# -*- coding: utf-8 -*-
+name: CI 审计流水线
+
+# 参考 quant-backtest-guard 的 CI 集成思路：每次策略/代码改动自动跑
+# 全量测试 + 回测审计，阻止有严重偏差的策略进入实盘。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: 全量测试 + 回测审计
+    runs-on: ubuntu-latest
+    env:
+      STOCKAI_MOCK: "1"
+      QT_QPA_PLATFORM: "offscreen"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 运行全量测试
+        run: python -B tests/run_all.py
+      - name: 运行回测审计冒烟（8 条分级规则）
+        run: python -B - <<'PY'
+import os, sys
+sys.path.insert(0, ".")
+from core.quant.backtest_auditor import audit_strategy  # noqa: E402
+import pandas as pd
+# 构造一个最小 OHLCV 样本做审计冒烟（确定性规则，不进实盘）
+df = pd.DataFrame({
+    "date": pd.date_range("2024-01-01", periods=120, freq="D"),
+    "open": [100 + i * 0.1 for i in range(120)],
+    "high": [102 + i * 0.1 for i in range(120)],
+    "low": [98 + i * 0.1 for i in range(120)],
+    "close": [101 + i * 0.1 for i in range(120)],
+    "volume": [1000000] * 120,
+})
+report = audit_strategy(df, "smoke_strategy", {"ma_short": 5, "ma_long": 20})
+fatal = [r for r in report.get("results", []) if r.get("severity") == "critical"]
+print(f"audit rules checked={len(report.get('results', []))} critical={len(fatal)}")
+assert fatal, "回测审计必须返回 critical 级检查项"
+PY

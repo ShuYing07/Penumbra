@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QIcon, QAction, QKeySequence, QShortcut
+from PyQt6.QtGui import (QIcon, QAction, QKeySequence, QShortcut, QPainter, QColor,
+                         QPixmap, QLinearGradient, QRadialGradient)
+from PyQt6.QtCore import Qt, QTimer, QSize, QThread, QRect, pyqtSignal
 from PyQt6.QtWidgets import (QLabel, QMainWindow, QStatusBar, QStyle, QSystemTrayIcon,
                              QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QMessageBox, QTextEdit, QComboBox, QSplitter, QListWidget,
                              QListWidgetItem, QStackedWidget, QFrame, QSizePolicy,
-                             QDockWidget, QMenu)
+                             QDockWidget, QMenu, QLineEdit)
 
-from app.ui.analysis_tab import AnalysisTab
+# （AnalysisTab 已懒加载：首屏不 import，用时经 _get_analysis_tab/_on_tab_changed 引入）
 from app.ui.analysis_log_tab import AnalysisLogTab
 from app.ui.compliance_audit_tab import ComplianceAuditTab
 from app.ui.backtest_tab import BacktestTab
@@ -47,6 +48,7 @@ from app.ui.terminal_tab import TerminalTab
 from app.ui.workflow_tab import WorkflowTab
 from app.ui.eval_tab import EvalTab
 from app.ui.event_graph_tab import EventGraphTab
+from app.ui.market_sentiment_tab import MarketSentimentTab
 from app.ui.evo_tab import EvoTab
 from app.ui.ui_theme import (BG_CARD, BORDER, TEXT_MAIN, TEXT_SUB, ACCENT,
                             UP, DOWN, WARN, BG_HOVER,
@@ -60,7 +62,7 @@ log = logging.getLogger("stockai.ui.main_window")
 # 导航分组（模块一：按任务阶段分组 —— 发现 / 研究 / 验证 / 积累 / 系统）
 NAV_GROUPS: list[tuple[str, list[tuple[str, int]]]] = [
     ("发现", [("💬 对话分析", 0), ("📊 市场概览", 1), ("📋 股票大全", 16),
-              ("🖥️ 终端模式", 31)]),
+              ("🖥️ 终端模式", 31), ("🌡️ 市场情绪", 36)]),
     ("研究", [("⭐ 自选股", 2), ("📈 分析", 3), ("📉 K线图", 4),
               ("📊 基本面", 24), ("⚔️ 多空辩论", 15), ("🕸️ 产业图谱", 14),
               ("⚙️ 工作流编辑器", 32), ("🎯 分析质量", 33),
@@ -78,6 +80,30 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, int]]]] = [
 ]
 NAV_ITEMS: list[tuple[str, int]] = [item for _g, items in NAV_GROUPS for item in items]
 
+# 意图驱动导航（模块五 · 参考华泰 AI 涨乐三大工作区：早点听/特别提醒/任务助手）。
+# 从「人找功能」转向「意图驱动」：按用户的真实诉求分组，而非按功能模块分组。
+INTENT_GROUPS: list[tuple[str, list[tuple[str, int]]]] = [
+    ("🎧 早点听 · 信息解读", [
+        ("💬 对话分析", 0), ("📊 市场概览", 1), ("📈 分析", 3),
+        ("⚔️ 多空辩论", 15), ("🎯 分析质量", 33), ("🕸️ 事件图谱", 34),
+        ("🌱 进化追踪", 35), ("🌡️ 市场情绪", 36)]),
+    ("🔔 特别提醒 · 信号盯盘", [
+        ("⭐ 自选股", 2), ("📉 K线图", 4), ("📡 实时流", 28),
+        ("✅ 数据质量", 25), ("🛡️ 风控", 18), ("⏪ 信号回放", 9),
+        ("🩺 系统健康", 26)]),
+    ("⚡ 任务助手 · 执行动作", [
+        ("📋 股票大全", 16), ("🔬 回测", 6), ("📊 组合回测", 7),
+        ("📊 组合优化", 23), ("⚙️ 参数寻优", 8), ("💼 模拟盘", 5),
+        ("🖥️ 终端模式", 31), ("⚙️ 工作流编辑器", 32), ("📊 基本面", 24),
+        ("🕸️ 产业图谱", 14), ("📚 学习库", 10), ("📝 决策记录", 11),
+        ("📋 分析日志", 12), ("🛡️ 合规审计", 13), ("🤝 协作空间", 17),
+        ("🔌 数据源", 19), ("🔒 隐私与数据", 20), ("⚖️ Swarm估值", 21),
+        ("🛡️ 合规监控", 22), ("🧪 合规测试", 29), ("🔌 插件管理", 30),
+        ("👁️ 多模态解析", 27)]),
+]
+INTENT_ITEMS: list[tuple[str, int]] = [
+    item for _g, items in INTENT_GROUPS for item in items]
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -87,6 +113,7 @@ class MainWindow(QMainWindow):
         self._start_handle = _time.monotonic()
         _perf.record_api("ui_start")
         self.setWindowTitle(tr("app.title"))
+        self.setObjectName("MainWindow")  # 供主题 QSS 背景图选择器使用
         self.resize(1200, 800)
         # 恢复窗口位置（如果上次保存过）
         from PyQt6.QtCore import QSettings
@@ -116,17 +143,18 @@ class MainWindow(QMainWindow):
                 self.setWindowIcon(QIcon(_ico))
                 break
 
-        # 首屏只创建必要tab，其他懒加载
+        # 首屏只创建必要tab，其他懒加载（2026-10 启动优化：analysis_tab 也懒加载，
+        # langgraph 等重依赖延迟到用户点击「分析」时才加载）
         self.chat_tab = ChatTab()
         self.chat_tab.analysis_done.connect(self._on_chat_analysis)
         self.chat_tab.request_tab.connect(
             lambda idx: self._switch_tab(idx, self._nav_btn_of(idx)))
         self.overview_tab = OverviewTab()
         self.watchlist_tab = WatchlistTab()
-        self.analysis_tab = AnalysisTab()
         self.chart_tab = ChartTab()
         # 延迟创建的tab
         self._lazy_tabs = {
+            3: ("分析", None),  # None → _on_tab_changed 内延迟 import（重依赖）
             5: ("模拟盘", PaperTab),
             6: ("回测", BacktestTab),
             7: ("组合回测", PortfolioTab),
@@ -158,6 +186,7 @@ class MainWindow(QMainWindow):
             33: ("分析质量", EvalTab),
             34: ("事件图谱", EventGraphTab),
             35: ("进化追踪", EvoTab),
+            36: ("市场情绪", MarketSentimentTab),
         }
         self._created = {}
 
@@ -166,9 +195,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.chat_tab, "对话分析")
         self.tabs.addTab(self.overview_tab, "市场概览")
         self.tabs.addTab(self.watchlist_tab, "自选股")
-        self.tabs.addTab(self.analysis_tab, "分析")
+        self.tabs.addTab(QWidget(), "分析")
         self.tabs.addTab(self.chart_tab, "K线图")
-        for i in range(5, 36):
+        for i in range(5, 37):
             name, _ = self._lazy_tabs[i]
             self.tabs.addTab(QWidget(), name)
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -281,9 +310,8 @@ class MainWindow(QMainWindow):
             self.tray.show()
 
         # 联动：分析完成 → 刷新决策记录 / K线图自动载入 / 模拟盘刷新
-        self.analysis_tab.analysis_finished.connect(self._on_analysis_done)
-        # 用户输入代码后立即加载K线（不等AI分析，数据层独立）
-        self.analysis_tab.ticker_submitted.connect(self.chart_tab.load)
+        # （analysis_tab 已懒加载，信号在创建时连接，见 _on_tab_changed）
+        # 用户输入代码后立即加载K线（数据层独立）
         # 自选股 → 加入分析（双击/右键）
         self.watchlist_tab.analyze_requested.connect(self._on_watchlist_analyze)
         # 自选股触发 → 托盘气泡通知
@@ -300,6 +328,28 @@ class MainWindow(QMainWindow):
         help_menu.addAction("检查更新", self._check_update)
         help_menu.addAction("❤️ 支持开发者", self._open_sponsor)
 
+        # 顶部命令栏（模块一 · 命令中心）：股票搜索 + 命令面板入口。
+        # 时间周期/指标叠加已内置在 K线图页（1M~MAX + 指标开关），此处不重复。
+        from PyQt6.QtWidgets import QToolBar
+        cmd_bar = QToolBar("命令中心")
+        cmd_bar.setMovable(False)
+        cmd_bar.setStyleSheet(
+            "QToolBar{border:none; background:transparent; spacing:6px;}"
+            "QLineEdit{min-width:280px;}")
+        self.cmd_search = QLineEdit()
+        self.cmd_search.setPlaceholderText("🔍 搜索股票代码 / 名称 / 拼音…（回车快速分析）")
+        self.cmd_search.returnPressed.connect(self._on_top_search)
+        cmd_bar.addWidget(self.cmd_search)
+        btn_palette = QPushButton("⌘ 命令面板 (Ctrl+K)")
+        btn_palette.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_palette.setStyleSheet(
+            f"QPushButton{{background:transparent; border:1px solid {BORDER};"
+            f"border-radius:6px; padding:4px 10px; color:{TEXT_SUB};}}"
+            f"QPushButton:hover{{color:{ACCENT}; border-color:{ACCENT};}}")
+        btn_palette.clicked.connect(self._open_command_palette)
+        cmd_bar.addWidget(btn_palette)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, cmd_bar)
+
         # 模块三：全局快捷键（Ctrl+K 命令面板 / Ctrl+1~9 导航 / Ctrl+M 主题 / Ctrl+Shift+*）
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self._open_command_palette)
         for i in range(1, 10):
@@ -309,23 +359,20 @@ class MainWindow(QMainWindow):
                               NAV_ITEMS[_i][1], self.nav_buttons[_i]))
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self._toggle_theme)
         QShortcut(QKeySequence("Ctrl+Shift+A"), self,
-                  activated=lambda: self._switch_tab(0, self.nav_buttons[0]))
+                  activated=self._open_ai_assistant)
         QShortcut(QKeySequence("Ctrl+Shift+B"), self,
                   activated=lambda: self._switch_tab(15, self._nav_btn_of(15)))
         QShortcut(QKeySequence("Ctrl+Shift+R"), self,
                   activated=lambda: self._switch_tab(6, self._nav_btn_of(6)))
 
-        # 模块三：浮动 AI 按钮（右下角）
-        self.ai_fab = QPushButton("🤖", self)
-        self.ai_fab.setToolTip("AI 助手：快速唤起对话分析（感知当前股票）")
-        self.ai_fab.setFixedSize(52, 52)
-        self.ai_fab.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.ai_fab.setStyleSheet(
-            "QPushButton{background:rgba(0,229,255,0.18); border:1px solid #00E5FF;"
-            "border-radius:26px; font-size:22px; color:#00E5FF;}"
-            "QPushButton:hover{background:rgba(0,229,255,0.32);}")
-        self.ai_fab.clicked.connect(self._open_ai_assistant)
-        self.ai_fab.raise_()
+        # 模块三：浮动 AI 助手（右下角 48px 玻璃按钮 + 感知当前股票面板）
+        self.current_ticker: str = ""
+        self.current_ticker_name: str = ""
+        from app.ui.floating_ai import FloatingAI
+        self.floating_ai = FloatingAI(self)
+        self.floating_ai.show()
+        self.floating_ai.raise_()
+        self.floating_ai.refresh_context()
 
         # 启动公告：延迟弹出，提示用户去 GitHub 查看最新版本
         from PyQt6.QtCore import QTimer
@@ -551,8 +598,26 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"命令执行失败：{e}", 4000)
 
+    def _get_analysis_tab(self):
+        """惰性获取「分析」页（懒加载后兼容旧引用：用时才创建并连接信号）。"""
+        tab = self._created.get(3)
+        if tab is None:
+            try:
+                from app.ui.analysis_tab import AnalysisTab
+                tab = AnalysisTab()
+                self._created[3] = tab
+                self.analysis_tab = tab
+                tab.analysis_finished.connect(self._on_analysis_done)
+                tab.ticker_submitted.connect(self.chart_tab.load)
+            except Exception:  # noqa: BLE001
+                tab = None
+        return tab
+
     def _open_stock(self, code: str) -> None:
         """从命令面板打开某只股票：切到分析页并填入代码，K线同步加载。"""
+        self.analysis_tab = self._get_analysis_tab()
+        if self.analysis_tab is None:
+            return
         self.analysis_tab.input.setText(code)
         self.tabs.setCurrentWidget(self.analysis_tab)
         try:
@@ -560,8 +625,40 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
 
+    def paintEvent(self, e) -> None:  # noqa: N802
+        """玻璃拟态背景（2026-10 起纯玻璃态，无图片）：
+        深色基底 + 顶部冷光环境渐变 + 顶部细高光，半透明玻璃卡片叠于其上。
+        仅暗色主题启用；浅色主题保持纯净背景。"""
+        try:
+            from app.ui.ui_theme import current_theme
+            if current_theme() == "dark":
+                p = QPainter(self)
+                try:
+                    r = self.rect()
+                    # 基底纵向渐变（Apple 玻璃感：顶部微亮、底部深沉）
+                    grad = QLinearGradient(0, 0, 0, r.height())
+                    grad.setColorAt(0.0, QColor(13, 18, 28))
+                    grad.setColorAt(0.35, QColor(10, 12, 16))
+                    grad.setColorAt(1.0, QColor(7, 9, 13))
+                    p.fillRect(r, grad)
+                    # 顶部冷光（模拟玻璃面板的环境反射，强调色低透明度径向渐变）
+                    glow = QRadialGradient(r.center().x(), 0,
+                                           max(r.width(), r.height()) * 0.55)
+                    glow.setColorAt(0.0, QColor(0, 180, 216, 22))
+                    glow.setColorAt(0.6, QColor(0, 180, 216, 6))
+                    glow.setColorAt(1.0, QColor(0, 180, 216, 0))
+                    p.fillRect(r, glow)
+                    # 顶部细高光（1px 玻璃边缘光）
+                    p.fillRect(QRect(0, 0, r.width(), 1), QColor(255, 255, 255, 18))
+                finally:
+                    p.end()
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        super().paintEvent(e)
+
     def _open_ai_assistant(self) -> None:
-        """浮动 AI 按钮：唤起对话分析，自动感知当前页面与选中股票。"""
+        """唤起浮动 AI 助手（Ctrl+Shift+A / 悬浮按钮）：感知当前页面与选中股票。"""
         cur = ""
         page = "对话分析"
         try:
@@ -570,19 +667,56 @@ class MainWindow(QMainWindow):
             idx = self.tabs.indexOf(w)
             page = self.tabs.tabText(idx) if idx >= 0 else page
             # 感知当前股票：优先分析页输入框，其次右侧面板标题
-            t = self.analysis_tab.input.text().strip()
+            _at = self._get_analysis_tab()
+            t = _at.input.text().strip() if _at else ""
             if t:
                 cur = t
             elif self.r_stock_name.text() and "未选择" not in self.r_stock_name.text():
                 cur = self.r_stock_name.text().split()[-1]
+            if cur:
+                self.set_current_ticker(cur)
             self.chat_tab.set_context(page, cur)
         except Exception:  # noqa: BLE001
             pass
+        self.floating_ai.show_panel()
+
+    def _on_top_search(self) -> None:
+        """顶部命令栏搜索：定位到分析页并触发分析（K线不等 AI，同步加载）。"""
+        t = self.cmd_search.text().strip()
+        if not t:
+            return
+        self.set_current_ticker(t)
+        try:
+            _at = self._get_analysis_tab()
+            if _at:
+                _at.input.setText(t)
+                _at._start()
+        except Exception as e:  # noqa: BLE001
+            log.warning("顶部搜索失败: %s", e)
+        self._switch_tab(3, self._nav_btn_of(3))
+
+    def set_current_ticker(self, ticker: str = "", name: str = "") -> None:
+        """记录当前正在查看的标的（供浮动 AI / 情境感知使用）。"""
+        ticker = (ticker or "").strip()
+        self.current_ticker = ticker
+        self.current_ticker_name = (name or "").strip()
+        try:
+            self.floating_ai.refresh_context()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_ai_query(self, query: str) -> None:
+        """浮动 AI 自然语言指令路由：切到对话分析页并交给 Agent 链路。"""
+        q = (query or "").strip()
+        if not q:
+            return
         self._switch_tab(0, self._nav_btn_of(0))
-        if cur:
-            self.chat_tab.input.setText(cur)
-            self.chat_tab.input.setFocus()
-        else:
+        try:
+            self.chat_tab.input.setText(q)
+            self.chat_tab._analyze()
+        except Exception as e:  # noqa: BLE001
+            log.warning("AI 指令路由失败: %s", e)
+            self.chat_tab.input.setText(q)
             self.chat_tab.input.setFocus()
 
     def resizeEvent(self, e) -> None:  # noqa: N802
@@ -600,11 +734,9 @@ class MainWindow(QMainWindow):
                         self.info_dock.show()
         except Exception:  # noqa: BLE001
             pass
-        if hasattr(self, "ai_fab"):
-            m = 24
-            self.ai_fab.move(self.width() - self.ai_fab.width() - m,
-                             self.height() - self.ai_fab.height() - m)
-            self.ai_fab.raise_()
+        if hasattr(self, "floating_ai"):
+            self.floating_ai._place()
+            self.floating_ai.raise_()
 
     # ---------- 模块六：首次启动引导 ----------
     def _maybe_show_onboarding(self) -> None:
@@ -700,7 +832,7 @@ class MainWindow(QMainWindow):
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
-        w.setMaximumWidth(240)
+        w.setMaximumWidth(250)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 12, 8, 8)
         lay.setSpacing(4)
@@ -710,32 +842,38 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet(f"font-size:16px; font-weight:bold; color:{ACCENT}; padding:8px;")
         lay.addWidget(logo)
 
-        # 导航项（模块一：按任务阶段分组 —— 发现/研究/验证/积累/系统）
-        self.nav_buttons = []
-        for group, items in NAV_GROUPS:
-            gh = QLabel(group)
-            gh.setStyleSheet(
-                f"color:{TEXT_SUB}; font-size:11px; font-weight:bold;"
-                f"padding:6px 10px 2px 10px;")
-            lay.addWidget(gh)
-            for label, idx in items:
-                btn = QPushButton(label)
-                btn.setCheckable(True)
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        text-align:left; padding:8px 12px; border:none;
-                        border-radius:8px; color:{TEXT_SUB};
-                    }}
-                    QPushButton:hover {{ background:{BG_HOVER}; color:{TEXT_MAIN}; }}
-                    QPushButton:checked {{
-                        background:rgba(0,229,255,0.12);
-                        color:{ACCENT}; border-left:3px solid {ACCENT};
-                    }}
-                """)
-                btn.clicked.connect(lambda _, i=idx, b=btn: self._switch_tab(i, b))
-                self.nav_buttons.append(btn)
-                lay.addWidget(btn)
+        # 导航模式切换（模块五：经典分组 ↔ 意图驱动三大工作区）
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        self.btn_mode_classic = QPushButton("🧭 经典")
+        self.btn_mode_classic.setCheckable(True)
+        self.btn_mode_intent = QPushButton("🎯 意图")
+        self.btn_mode_intent.setCheckable(True)
+        self.btn_mode_intent.setChecked(True)  # 默认意图驱动
+        self._nav_mode = "intent"
+        for b in (self.btn_mode_classic, self.btn_mode_intent):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(f"""
+                QPushButton {{ background:transparent; border:1px solid {BORDER};
+                    border-radius:6px; padding:3px 8px; color:{TEXT_SUB}; font-size:11px; }}
+                QPushButton:hover {{ color:{TEXT_MAIN}; border-color:{ACCENT}; }}
+                QPushButton:checked {{ background:rgba(0,180,216,0.14);
+                    color:{ACCENT}; border-color:{ACCENT}; }}
+            """)
+        self.btn_mode_classic.clicked.connect(lambda: self._set_nav_mode("classic"))
+        self.btn_mode_intent.clicked.connect(lambda: self._set_nav_mode("intent"))
+        mode_row.addWidget(self.btn_mode_classic)
+        mode_row.addWidget(self.btn_mode_intent)
+        mode_row.addStretch(1)
+        lay.addLayout(mode_row)
 
+        # 导航容器（切换模式时重建内部按钮）
+        self.nav_container = QWidget()
+        self.nav_vlay = QVBoxLayout(self.nav_container)
+        self.nav_vlay.setContentsMargins(0, 0, 0, 0)
+        self.nav_vlay.setSpacing(4)
+        lay.addWidget(self.nav_container)
+        self._render_nav()
 
         # 券商官方开户入口
         from broker_links import list_brokers
@@ -774,6 +912,49 @@ class MainWindow(QMainWindow):
         lay.addStretch(1)
         return w
 
+    def _set_nav_mode(self, mode: str) -> None:
+        """切换经典分组 / 意图驱动导航（模块五）。"""
+        if mode == self._nav_mode:
+            return
+        self._nav_mode = mode
+        self.btn_mode_classic.setChecked(mode == "classic")
+        self.btn_mode_intent.setChecked(mode == "intent")
+        self._render_nav()
+
+    def _render_nav(self) -> None:
+        """按当前模式重建导航按钮组。"""
+        while self.nav_vlay.count():
+            item = self.nav_vlay.takeAt(0)
+            wdg = item.widget()
+            if wdg is not None:
+                wdg.deleteLater()
+        self.nav_buttons = []
+        groups = INTENT_GROUPS if self._nav_mode == "intent" else NAV_GROUPS
+        for group, items in groups:
+            gh = QLabel(group)
+            gh.setStyleSheet(
+                f"color:{TEXT_SUB}; font-size:11px; font-weight:bold;"
+                f"padding:6px 10px 2px 10px;")
+            self.nav_vlay.addWidget(gh)
+            for label, idx in items:
+                btn = QPushButton(label)
+                btn.setCheckable(True)
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        text-align:left; padding:8px 12px; border:none;
+                        border-radius:8px; color:{TEXT_SUB};
+                    }}
+                    QPushButton:hover {{ background:{BG_HOVER}; color:{TEXT_MAIN}; }}
+                    QPushButton:checked {{
+                        background:rgba(0,180,216,0.14);
+                        color:{ACCENT}; border-left:3px solid {ACCENT};
+                    }}
+                """)
+                btn.clicked.connect(lambda _, i=idx, b=btn: self._switch_tab(i, b))
+                self.nav_buttons.append(btn)
+                self.nav_vlay.addWidget(btn)
+        self.nav_vlay.addStretch(1)
+
     def _on_tab_changed(self, idx: int) -> None:
         """懒加载：切换到对应tab时才创建。"""
         if idx in self._lazy_tabs and idx not in self._created:
@@ -781,6 +962,9 @@ class MainWindow(QMainWindow):
             try:
                 from core.performance_monitor import perf as _perf
                 _h = _perf.start_timer(f"tab.{idx}.{name}")
+                if cls is None and idx == 3:
+                    from app.ui.analysis_tab import AnalysisTab  # 延迟：重依赖
+                    cls = AnalysisTab
                 tab = cls()
                 _perf.stop_timer(f"tab.{idx}.{name}", _h)
                 cur = self.tabs.currentIndex()
@@ -791,9 +975,17 @@ class MainWindow(QMainWindow):
                 # 自动激活相邻页），恢复到目标页，避免"点击 A 却显示 A 的前一页"
                 if self.tabs.currentIndex() != cur:
                     self.tabs.setCurrentIndex(cur)
-                _attr = {11: "history_tab", 5: "paper_tab", 12: "analysis_log_tab"}.get(idx)
+                _attr = {11: "history_tab", 5: "paper_tab", 12: "analysis_log_tab",
+                         3: "analysis_tab"}.get(idx)
                 if _attr:
                     setattr(self, _attr, tab)
+                if idx == 3:
+                    # 「分析」页创建后连接联动信号（原首屏连接移至此）
+                    try:
+                        tab.analysis_finished.connect(self._on_analysis_done)
+                        tab.ticker_submitted.connect(self.chart_tab.load)
+                    except Exception:  # noqa: BLE001
+                        pass
                 if idx == 16:
                     # 股票大全：双击/按钮 → 加入自选（与自选股页同样的处理）
                     try:
@@ -1060,6 +1252,9 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_watchlist_analyze(self, ticker: str) -> None:
+        self.analysis_tab = self._get_analysis_tab()
+        if self.analysis_tab is None:
+            return
         self.analysis_tab.input.setText(ticker)
         self.tabs.setCurrentWidget(self.analysis_tab)
 

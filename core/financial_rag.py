@@ -94,12 +94,13 @@ def retrieve(query: str, top_k: int = 5, alpha: float = 0.5) -> list[dict]:
     cand_ids = set(vec_hits) | bm_top
 
     results = []
+    bm_max = max(bm_all.values()) or 1.0  # max-relative：保留 BM25 相对强度
     for d in docs:
         if d["doc_id"] not in cand_ids:
             continue
         v_score = vec_hits[d["doc_id"]].get("score", 0.0) if d["doc_id"] in vec_hits else 0.0
         bm = bm_all.get(d["doc_id"], 0.0)
-        bm_norm = 1.0 - 1.0 / (1.0 + bm)  # sigmoid 归一化到 (0,1)
+        bm_norm = bm / bm_max  # 相对最大值归一化（唯一关键词精确命中→1.0）
         final = alpha * v_score + (1 - alpha) * bm_norm
         results.append({
             "doc_id": d["doc_id"], "text": d["text"],
@@ -107,7 +108,8 @@ def retrieve(query: str, top_k: int = 5, alpha: float = 0.5) -> list[dict]:
             "vector_score": round(v_score, 3), "bm25_score": round(bm, 3),
             "final_score": round(final, 3),
         })
-    results.sort(key=lambda x: x["final_score"], reverse=True)
+    # BM25 精确命中（关键词唯一性）在分数持平时优先，避免被向量高分文档挤出
+    results.sort(key=lambda x: (x["final_score"], x["bm25_score"]), reverse=True)
     return results[:top_k]
 
 

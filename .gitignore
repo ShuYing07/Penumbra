@@ -53,3 +53,6 @@ _st*.txt
 
 # 发布资产（zip 走 GitHub Release，不进仓库）
 *.zip
+
+# AI 工作目录（内部工具，不开源）
+.workbuddy/

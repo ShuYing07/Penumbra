@@ -91,18 +91,34 @@ def _check_time_alignment(df: pd.DataFrame) -> dict:
             "detail": f"时间索引单调无重复，共 {len(idx)} 根，截至 {idx.max().date()}"}
 
 
-def _check_overfit(df: pd.DataFrame, strategy: str, params: dict) -> dict:
+def _check_overfit(df: pd.DataFrame, market: str, strategy: str,
+                   params: dict) -> dict:
     try:
-        wf = walk_forward(df, in_ratio=0.6)
+        wf = walk_forward(df, market, strategy, params or None, in_ratio=0.6)
     except Exception as e:  # noqa: BLE001
         return {"severity": "high", "location": "walk_forward",
                 "detail": f"样本外验证不可计算：{e}"}
-    oos_ret = float((wf.get("oos") or {}).get("annual_return", 0.0) or 0.0)
-    in_ret = float((wf.get("in") or {}).get("annual_return", 0.0) or 0.0)
+    # 注意：walk_forward 返回 {in, out, full}（非 oos），metrics 键为
+    # annual_return_pct（非 annual_return）；误读会令本规则永远假阴性。
+    def _ret(section: dict) -> float:
+        v = section.get("annual_return_pct")
+        if v is None:
+            v = section.get("total_return_pct")
+        try:
+            f = float(v or 0.0)
+            return f / 100.0 if math.isfinite(f) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    if "error" in wf:
+        return {"severity": "high", "location": "walk_forward",
+                "detail": f"样本外验证不可用：{wf['error']}"}
+    oos_ret = _ret(wf.get("out") or {})
+    in_ret = _ret(wf.get("in") or {})
     if in_ret > 0 and oos_ret < 0:
         return {"severity": "high", "location": f"{strategy} 参数 {params}",
                 "detail": f"样本内 {in_ret:.1%} 为正、样本外 {oos_ret:.1%} 转负——过拟合风险"}
-    if oos_ret < in_ret * 0.5:
+    if in_ret > 0 and oos_ret < in_ret * 0.5:
         return {"severity": "high", "location": f"{strategy} 参数 {params}",
                 "detail": f"样本外 {oos_ret:.1%} 显著低于样本内 {in_ret:.1%}"}
     return {"severity": "info", "location": f"{strategy}",
@@ -111,14 +127,19 @@ def _check_overfit(df: pd.DataFrame, strategy: str, params: dict) -> dict:
 
 def _check_cost_neglect(df: pd.DataFrame, market: str, strategy: str,
                         params: dict) -> dict:
-    """含费 vs 不含费收益并排（诚实 vs 偏差）。"""
+    """含费 vs 不含费收益并排（诚实 vs 偏差）。
+
+    注意：BacktestConfig 没有 fee_rate/stamp_duty/slippage 字段——直接赋值
+    这些属性不会生效（resolve_fee 只看 fee 字段），须传入零费 FeeModel，
+    否则对照组仍按默认费率计费，本规则永远假阴性。
+    """
     try:
         honest = run_backtest(df, market, strategy, params,
                               BacktestConfig(market=market))
-        no_fee_cfg = BacktestConfig(market=market)
-        no_fee_cfg.fee_rate = 0.0
-        no_fee_cfg.stamp_duty = 0.0
-        no_fee_cfg.slippage = 0.0
+        zero_fee = FeeModel(commission_rate=0.0, min_commission=0.0,
+                            stamp_tax_sell=0.0, transfer_fee=0.0,
+                            slippage_bps=0.0)
+        no_fee_cfg = BacktestConfig(market=market, fee=zero_fee)
         biased = run_backtest(df, market, strategy, params, no_fee_cfg)
         h_ret = float(honest.metrics.get("total_return_pct", 0.0) or 0.0) / 100.0
         b_ret = float(biased.metrics.get("total_return_pct", 0.0) or 0.0) / 100.0
@@ -203,7 +224,7 @@ def audit_strategy(df: pd.DataFrame, market: str = "CN",
     checks.append({"rule": "time_alignment", "name": "时间对齐",
                    **_check_time_alignment(df)})
     checks.append({"rule": "overfit", "name": "过拟合",
-                   **_check_overfit(df, strategy, params)})
+                   **_check_overfit(df, market, strategy, params)})
     checks.append({"rule": "cost_neglect", "name": "成本忽视",
                    **_check_cost_neglect(df, market, strategy, params)})
     checks.append({"rule": "data_snooping", "name": "数据窥探",

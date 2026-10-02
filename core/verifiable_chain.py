@@ -27,9 +27,21 @@ _STEP_RE = re.compile(
     r"步骤\s*(\d+)\s*[｜|]\s*结论[:：]\s*(.*?)\s*[｜|]\s*数据来源[:：]\s*(.*?)\s*[｜|]\s*公式[:：]\s*(.*?)(?:\n|$)",
     re.S)
 
+# 宽松路径：按「步骤N」块切分，块内逐字段提取（允许字段换行、半角/全角分隔符、字段名别名）
+_BLOCK_START = re.compile(r"步骤\s*(\d+)\s*[｜|:：、\s]+", re.M)
+_FIELD_PATTERNS: Dict[str, re.Pattern] = {
+    "conclusion": re.compile(r"(?:结论|conclusion)\s*[:：]\s*(.*?)(?=(?:数据来源|source|公式|formula)\s*[:：]|\Z)", re.S | re.I),
+    "source":     re.compile(r"(?:数据来源|source)\s*[:：]\s*(.*?)(?=(?:公式|formula)\s*[:：]|\Z)", re.S | re.I),
+    "formula":    re.compile(r"(?:公式|formula)\s*[:：]\s*(.*?)(?=步骤\s*\d+|\Z)", re.S | re.I),
+}
+
 
 def extract_verifiable_steps(text: str) -> List[Dict[str, str]]:
-    """从报告文本中解析可验证推理链步骤。失败或缺失字段的步骤被跳过。"""
+    """从报告文本解析可验证推理链步骤。失败或缺失字段的步骤被跳过。
+
+    优先匹配严格单行格式（步骤N｜结论：…｜数据来源：…｜公式：…）；
+    不满足时按「步骤N」块做宽松解析，容忍字段换行与分隔符差异。
+    """
     steps: List[Dict[str, str]] = []
     for m in _STEP_RE.finditer(text or ""):
         step = {"step": m.group(1).strip(),
@@ -38,6 +50,19 @@ def extract_verifiable_steps(text: str) -> List[Dict[str, str]]:
                 "formula": m.group(4).strip()}
         if step["conclusion"] and step["source"] and step["formula"]:
             steps.append(step)
+    if steps:
+        return steps
+    # 宽松路径
+    matches = list(_BLOCK_START.finditer(text or ""))
+    for i, m in enumerate(matches):
+        block = text[m.end(): matches[i + 1].start() if i + 1 < len(matches) else len(text)]
+        fields: Dict[str, str] = {}
+        for key, pat in _FIELD_PATTERNS.items():
+            mm = pat.search(block)
+            if mm:
+                fields[key] = mm.group(1).strip().strip("｜|").strip()
+        if fields.get("conclusion") and fields.get("source") and fields.get("formula"):
+            steps.append({"step": m.group(1).strip(), **fields})
     return steps
 
 
@@ -81,4 +106,10 @@ if __name__ == "__main__":
     md = chain_markdown(steps)
     assert "可验证推理链" in md and "RSI=62.9" in md
     assert validate_chain([])["verdict"] == "EMPTY"
-    print("verifiable_chain self-check ok")
+    # 宽松格式（字段换行 + 半角冒号）也应解析成功
+    loose = ("步骤1：\n结论: RSI=62.9 中性偏强\n数据来源: 近30日收盘价\n公式: RSI(14)=100-100/(1+RS)\n"
+             "步骤2：\n结论: MACD 金叉\n数据来源: 日线 close\n公式: MACD=DIF-DEA")
+    loose_steps = extract_verifiable_steps(loose)
+    assert len(loose_steps) == 2, loose_steps
+    assert validate_chain(loose_steps)["verdict"] == "PASS"
+    print("verifiable_chain self-check ok (strict + loose)")

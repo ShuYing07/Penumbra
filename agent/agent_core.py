@@ -366,10 +366,19 @@ class AgentCore:
                 stock=(context or {}).get("stock"),
                 skill=(context or {}).get("skill"),
                 history=(context or {}).get("history"))
+            # 蒸馏知识注入：检索与请求相关的本地金融知识（含边界提醒），
+            # 失败静默降级（不影响主流程）。
+            kb_ctx = ""
+            try:
+                from core.knowledge_distiller import distill_context
+                kb_ctx = distill_context(user_input, limit=3)
+            except Exception:  # noqa: BLE001
+                pass
             prompt = (
                 f"你是疏影·知微的AI研究助手。{skill}\n\n"
                 f"用户说：{user_input}\n\n"
                 f"{ctx}\n\n"
+                f"{kb_ctx}\n\n"
                 f"工具执行结果如下：\n{payload}\n\n"
                 f"请按技能指令与简洁中文组织回答（3-6条要点），只陈述客观数据，"
                 f"不得给出买入/卖出/目标价等投资建议。")

@@ -211,11 +211,18 @@ def _db_conn():
 
 
 class StreamProcessor:
-    """流式处理管线：摄取 → 清洗(去重/校验) → 分析(情感/聚合) → 输出。"""
+    """流式处理管线：摄取 → 清洗(去重/校验) → 分析(情感/聚合) → 输出。
 
-    def __init__(self, engine: StreamEngine, window_seconds: int = 300):
+    可选 checkpoint（streaming.stream_checkpoint.CheckpointStore）：
+    挂载后去重从进程内存升级为 SQLite 持久化幂等（断线重连/进程重启后
+    补数不重不漏），并在每条消息处理后单调推进 topic 锚点时间戳。
+    """
+
+    def __init__(self, engine: StreamEngine, window_seconds: int = 300,
+                 checkpoint=None):
         self.engine = engine
         self.window_seconds = window_seconds
+        self.checkpoint = checkpoint  # CheckpointStore | None
         self._seen: set[str] = set()
         self._seen_lock = threading.Lock()
         # 窗口聚合：topic -> key -> deque[(ts, value)]
@@ -230,13 +237,23 @@ class StreamProcessor:
         self.filing_ai_parser = None  # callable(filing_dict) -> summary；公告 AI 解析钩子
 
     # ---- 工具 ----
-    def _dedup(self, msg_id: str) -> bool:
+    def _dedup(self, msg_id: str, topic: str = "", ts: float = 0.0) -> bool:
         with self._seen_lock:
             if msg_id in self._seen:
                 self.duplicates_skipped += 1
                 return True
             self._seen.add(msg_id)
-            return False
+        # 持久化幂等 + 锚点推进（挂载 checkpoint 时）
+        if self.checkpoint is not None and topic:
+            try:
+                if not self.checkpoint.mark_processed(topic, msg_id):
+                    self.duplicates_skipped += 1
+                    return True  # 持久层判定重复（重启后仍生效）
+                if ts:
+                    self.checkpoint.set_anchor(topic, float(ts))
+            except Exception:  # noqa: BLE001  持久层故障不阻塞主流
+                pass
+        return False
 
     def _window_push(self, topic: str, key: str, value: float):
         with self._windows_lock:
@@ -264,7 +281,7 @@ class StreamProcessor:
         """news.raw → 去重 → 情感分析 → news.processed + SQLite。"""
         title = raw.get("title") or raw.get("text") or ""
         msg_id = raw.get("id") or _msg_id(raw.get("key", ""), {"title": title})
-        if self._dedup(msg_id):
+        if self._dedup(msg_id, TOPIC_NEWS_RAW, float(raw.get("ts", time.time()))):
             return {"skipped": True, "id": msg_id}
         from core.sentiment import analyze_sentiment
         sentiment = analyze_sentiment(title[:300])
@@ -283,7 +300,7 @@ class StreamProcessor:
         price = float(raw.get("price", 0.0))
         volume = float(raw.get("volume", 0.0))
         msg_id = raw.get("id") or _msg_id(code, {"price": price, "ts": raw.get("ts", 0)})
-        if self._dedup(msg_id):
+        if self._dedup(msg_id, TOPIC_MARKET_TICK, float(raw.get("ts", time.time()))):
             return {"skipped": True, "id": msg_id}
         self._window_push(TOPIC_MARKET_TICK, code, volume)
         agg = self._window_agg(TOPIC_MARKET_TICK, code)
@@ -298,7 +315,7 @@ class StreamProcessor:
         """filings.new → 去重 → （可选）AI 解析回调生成摘要卡片。"""
         title = raw.get("title", "")
         msg_id = raw.get("id") or _msg_id(raw.get("key", ""), {"title": title})
-        if self._dedup(msg_id):
+        if self._dedup(msg_id, TOPIC_FILINGS_NEW, float(raw.get("ts", time.time()))):
             return {"skipped": True, "id": msg_id}
         out = {"id": msg_id, "title": title[:200], "code": raw.get("code", ""),
                "ts": raw.get("ts", time.time())}

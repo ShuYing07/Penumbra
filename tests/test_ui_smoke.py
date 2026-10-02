@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 from app.ui.main_window import MainWindow, NAV_GROUPS
 
-TOTAL = 36
+TOTAL = 37
 w = MainWindow()
 assert w.tabs.count() == TOTAL, f"期望 {TOTAL} 个 tab（0-{TOTAL-1}），实际 {w.tabs.count()}"
 # 懒加载占位页存在

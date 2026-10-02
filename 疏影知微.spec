@@ -70,6 +70,10 @@ hiddenimports += [
     'core.agents.evo_memory',
     'security.ai_reviewer', 'security.compliance_sandbox',
     'app.ui.eval_tab', 'app.ui.event_graph_tab', 'app.ui.evo_tab',
+    # 2026-10 翻新：八条审计 / 断点续传 / 投研Skill / 知识蒸馏库
+    'core.quant.audit_rules8', 'core.research_skills',
+    'core.distilled_knowledge', 'core.knowledge_distiller',
+    'streaming.stream_checkpoint',
 ]
 
 

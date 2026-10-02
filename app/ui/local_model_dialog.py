@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""本地模型管理对话框：Ollama 状态检测、模型下载（进度条）、安装指引。"""
+"""本地模型管理对话框（2026-10 升级）：
+- 模型清单升级到 2026 前沿（Ling-3.0-flash-Fin / Qwen3-14B / Qwen3-VL / Amsi-fin-o1）；
+- 实时探测 Ollama 已安装模型 + 云端 AI 引擎状态；
+- 「一键复制安装命令」引导（绝不自动执行安装，红线约束）。
+"""
 from __future__ import annotations
 
 import os
@@ -7,14 +11,24 @@ import os
 from PyQt6.QtCore import QThread, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtCore import QUrl
-from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
-                             QProgressBar, QPushButton, QVBoxLayout)
+from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox,
+                             QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                             QVBoxLayout)
 
 from core import llm_local
+from core import model_router
 from core.config import LOCAL_MODEL, LOCAL_MODEL_SMALL
 
-_MODELS = [("Qwen2.5-7B（推荐，中文好，约 4.7GB，8GB 显存）", LOCAL_MODEL),
-           ("Qwen2.5-3B（低配/纯CPU，约 2.0GB，速度快）", LOCAL_MODEL_SMALL)]
+# 2026-10 前沿模型清单（Ollama 标签名）
+_MODELS = [
+    ("Ling-3.0-flash-Fin（金融增强 · Finance Agent v2 榜首，约 78GB，24GB+ 显存）",
+     "ling-3.0-flash-fin"),
+    ("Qwen3-14B（本地综合最佳，Q4 约 9GB，12-16GB 显存）", "qwen3:14b"),
+    ("Qwen3-VL-7B（视觉：K线图/财报截图/票据）", "qwen3-vl:7b"),
+    ("Amsi-fin-o1（金融视觉语言模型，可选）", "amsi-fin-o1"),
+    ("Qwen2.5-7B（兼容低配，约 4.7GB）", LOCAL_MODEL),
+    ("Qwen2.5-3B（低配/纯CPU，约 2.0GB）", LOCAL_MODEL_SMALL),
+]
 
 
 class PullWorker(QThread):
@@ -36,8 +50,8 @@ class LocalModelDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("本地模型管理（Ollama）")
-        self.setMinimumWidth(520)
+        self.setWindowTitle("本地模型管理（Ollama）· AI 引擎")
+        self.setMinimumWidth(620)
         self.worker: PullWorker | None = None
         self._build()
         self.refresh_status()
@@ -48,6 +62,13 @@ class LocalModelDialog(QDialog):
         self.lbl_status.setWordWrap(True)
         v.addWidget(self.lbl_status)
 
+        # ---- AI 引擎状态（云端可用平台 + 本地已装模型）----
+        self.lbl_engine = QLabel("")
+        self.lbl_engine.setWordWrap(True)
+        self.lbl_engine.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(self.lbl_engine)
+
+        # ---- 模型清单 ----
         row = QHBoxLayout()
         row.addWidget(QLabel("模型："))
         self.model_box = QComboBox()
@@ -56,7 +77,7 @@ class LocalModelDialog(QDialog):
         row.addWidget(self.model_box, 1)
         v.addLayout(row)
 
-        self.btn_pull = QPushButton("下载选中模型")
+        self.btn_pull = QPushButton("下载选中模型（约数 GB，耐心等待）")
         self.btn_pull.clicked.connect(self._pull)
         v.addWidget(self.btn_pull)
 
@@ -66,6 +87,15 @@ class LocalModelDialog(QDialog):
         v.addWidget(self.bar)
         self.lbl_progress = QLabel("")
         v.addWidget(self.lbl_progress)
+
+        # ---- 推荐安装命令（一键复制，绝不自动执行）----
+        self.lbl_cmd = QLabel("")
+        self.lbl_cmd.setWordWrap(True)
+        self.lbl_cmd.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        v.addWidget(self.lbl_cmd)
+        btn_copy = QPushButton("复制安装命令到剪贴板")
+        btn_copy.clicked.connect(self._copy_cmd)
+        v.addWidget(btn_copy)
 
         row2 = QHBoxLayout()
         btn_install = QPushButton("安装 Ollama（打开官网）")
@@ -85,8 +115,10 @@ class LocalModelDialog(QDialog):
         row3.addStretch()
         v.addLayout(row3)
 
-        v.addWidget(QLabel("说明：模型仅下载一次（Ollama 统一管理）；推理完全离线、零费用；"
-                           "RTX 5060 上 7B 约每秒数十 token。"))
+        v.addWidget(QLabel(
+            "说明：模型由 Ollama 统一管理、完全离线零费用。Ling-3.0-flash-Fin 是"
+            "蚂蚁百灵开源金融增强模型（Finance Agent v2 排行榜第一，MIT 协议），"
+            "财报/估值/多文档金融分析最佳；机器配置有限时建议 Qwen3-14B。"))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
@@ -100,6 +132,31 @@ class LocalModelDialog(QDialog):
 
     def refresh_status(self) -> None:
         self.lbl_status.setText(llm_local.status_text())
+        self._refresh_engine()
+
+    def _refresh_engine(self) -> None:
+        st = model_router.engine_status()
+        cloud = "、".join(st["cloud_ready"]) or "未配置（可在设置页填写 API Key）"
+        installed = "、".join(st["local_installed"]) or "无"
+        missing = "、".join(st["recommended_missing"]) or "（已齐）"
+        self.lbl_engine.setText(
+            f"<b>☁️ 云端引擎（已就绪）：</b>{cloud}<br>"
+            f"<b>💻 本地已装模型：</b>{installed}<br>"
+            f"<b>📥 推荐未装：</b>{missing}")
+        if st["recommended_missing"]:
+            first = st["recommended_missing"][0]
+            pull = next((m["pull"] for m in model_router.recommended_local_models()
+                         if m["name"] == first), "")
+            self.lbl_cmd.setText(f"推荐先装：{first}\n复制命令后在终端执行：{pull}")
+        else:
+            self.lbl_cmd.setText("")
+
+    def _copy_cmd(self) -> None:
+        m = self.current_model
+        pull = next((x["pull"] for x in model_router.recommended_local_models()
+                     if x["name"] == m), f"ollama pull {m}")
+        QApplication.clipboard().setText(pull)
+        self.lbl_status.setText(f"已复制：{pull}（请在你的终端手动执行，程序不自动安装）")
 
     def _pull(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -135,7 +192,7 @@ class LocalModelDialog(QDialog):
         self.lbl_progress.setText(("✅ " if ok else "❌ ") + msg)
         self.refresh_status()
         if ok:
-            # 运行期指定刚下载的模型（3B/7B 都可），LLMRunner 会读此变量
+            # 运行期指定刚下载的模型（金融任务路由也会探测到它）
             os.environ["STOCKAI_LOCAL_MODEL"] = self.current_model
             self.model_changed.emit()
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import (QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+                             QVBoxLayout, QWidget)
 
 from core.data import service
 from core.memory.reflection import decision_stats
@@ -64,6 +65,34 @@ class PaperTab(QWidget):
         bar.addWidget(btn)
         bar.addWidget(btn_reset)
 
+        # ---- 高保真模拟交易下单（模块六：市价/限价/止损 + 真实摩擦成本）----
+        order_row = QHBoxLayout()
+        self.ord_ticker = QLineEdit()
+        self.ord_ticker.setPlaceholderText("代码，如 600519 / AAPL")
+        self.ord_ticker.setMaximumWidth(130)
+        self.ord_side = QComboBox()
+        self.ord_side.addItems(["买入", "卖出"])
+        self.ord_side.setMaximumWidth(70)
+        self.ord_type = QComboBox()
+        self.ord_type.addItems(["market", "limit", "stop"])
+        self.ord_type.setMaximumWidth(90)
+        self.ord_qty = QLineEdit()
+        self.ord_qty.setPlaceholderText("数量（A股整手100）")
+        self.ord_qty.setMaximumWidth(120)
+        self.ord_px = QLineEdit()
+        self.ord_px.setPlaceholderText("现价")
+        self.ord_px.setMaximumWidth(80)
+        self.ord_limit = QLineEdit()
+        self.ord_limit.setPlaceholderText("限价/触发价")
+        self.ord_limit.setMaximumWidth(100)
+        btn_order = QPushButton("下单（含佣金/印花税/滑点）")
+        btn_order.clicked.connect(self._place_order)
+        for w in (self.ord_ticker, self.ord_side, self.ord_type, self.ord_qty,
+                  self.ord_px, self.ord_limit):
+            order_row.addWidget(w)
+        order_row.addWidget(btn_order)
+        order_row.addStretch(1)
+
         # ---- 持仓表 ----
         self.pos_table = QTableWidget(0, 7)
         self.pos_table.setHorizontalHeaderLabels(
@@ -92,6 +121,7 @@ class PaperTab(QWidget):
 
         v = QVBoxLayout(self)
         v.addLayout(bar)
+        v.addLayout(order_row)
         v.addWidget(self.pos_table)
         v.addWidget(self.curve)
         v.addWidget(self.trade_table, 1)
@@ -107,6 +137,35 @@ class PaperTab(QWidget):
 
     def _reset(self) -> None:
         paper.reset()
+        self.refresh()
+
+    def _place_order(self) -> None:
+        """高保真下单：市价/限价/止损 + 佣金/印花税/滑点。"""
+        ticker = self.ord_ticker.text().strip()
+        qty = self.ord_qty.text().strip()
+        px = self.ord_px.text().strip()
+        try:
+            qty = float(qty) if qty else 0.0
+            px = float(px) if px else 0.0
+            limit = float(self.ord_limit.text()) if self.ord_limit.text().strip() else 0.0
+        except ValueError:
+            self.lbl_stats.setText("下单失败：数量/价格需为数字")
+            return
+        # 市场推断：纯数字 → A股；含 .HK → 港股；含 . → 美股/其他；否则按 A股
+        market = "CN"
+        if ticker.upper().endswith(".HK"):
+            market = "HK"
+        elif "." in ticker:
+            market = "US"
+        side = self.ord_side.currentText()
+        result = paper.place_order(ticker, market, side,
+                                   self.ord_type.currentText(), qty, px,
+                                   limit_price=limit, stop_price=limit)
+        if result.get("shares", 0) > 0:
+            self.lbl_stats.setText(
+                f"✅ {side}成交 {result['shares']:g}股 @ {result['price']}（{result['note']}）")
+        else:
+            self.lbl_stats.setText(f"⚠️ 未成交：{result.get('note', '')}")
         self.refresh()
 
     @pyqtSlot(str)

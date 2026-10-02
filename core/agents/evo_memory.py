@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS evo_reflections(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   trade_id INTEGER, dimension TEXT, outcome TEXT, insight TEXT, ts REAL
 );
+CREATE TABLE IF NOT EXISTS evo_analysis_reflections(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT, ticker TEXT, verdict TEXT, confidence REAL, model_engine TEXT,
+  summary TEXT, lesson TEXT, ts REAL
+);
 """
 
 # 交易行为维度分类（关键词 → 维度）
@@ -124,6 +129,63 @@ def record_and_reflect(trade: Dict[str, Any]) -> dict:
     return {"trade_id": tid, "reflection": reflect(trade)}
 
 
+def analyze_reflect(analysis: Dict[str, Any]) -> dict:
+    """分析级反思（2026-10 升级）：AI 每次完成一次分析后自动沉淀经验。
+
+    analysis: {kind(财报/技术/估值/宏观/情绪/风险/通用), ticker, verdict(方向),
+               confidence(0~1), model_engine, summary}
+    确定性规则生成学习经验并落库 evo_analysis_reflections，形成
+    「分析 → 反思 → 方法论文本 → 后续改进」的自主学习闭环。
+    """
+    kind = str(analysis.get("kind") or "通用")
+    ticker = str(analysis.get("ticker") or "")
+    verdict = str(analysis.get("verdict") or "中性")
+    conf = min(max(float(analysis.get("confidence") or 0.5), 0.0), 1.0)
+    engine = str(analysis.get("model_engine") or "")
+    summary = str(analysis.get("summary") or "")[:200]
+    if conf >= 0.7:
+        lesson = (f"{kind}分析给出高置信「{verdict}」判断（置信度 {conf:.0%}，"
+                  f"引擎 {engine or '未知'}），可纳入后续决策基线")
+    elif conf <= 0.35:
+        lesson = (f"{kind}分析置信度仅 {conf:.0%}（引擎 {engine or '未知'}），"
+                  f"应交叉多个数据源/分析师后再决策")
+    else:
+        lesson = (f"{kind}分析判断「{verdict}」（置信度 {conf:.0%}），"
+                  f"需结合多空辩论与风控校准")
+    r = {"kind": kind, "lesson": lesson, "confidence": conf, "verdict": verdict}
+    try:
+        with _db() as c:
+            c.execute(
+                "INSERT INTO evo_analysis_reflections"
+                "(kind,ticker,verdict,confidence,model_engine,summary,lesson,ts)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (kind, ticker, verdict, conf, engine, summary, lesson,
+                 float(analysis.get("ts") or time.time())))
+    except Exception as e:  # noqa: BLE001
+        log.debug("分析反思入库失败：%s", e)
+    return r
+
+
+def analysis_lessons(limit: int = 100) -> dict:
+    """聚合历史分析经验：各类分析的置信分布与高频经验，用于学习库/进化页展示。"""
+    with _db() as c:
+        rows = c.execute(
+            "SELECT kind,verdict,confidence,lesson FROM evo_analysis_reflections"
+            " ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    if not rows:
+        return {"total": 0, "by_kind": {}, "recent": []}
+    by_kind: Dict[str, dict] = {}
+    for kind, verdict, conf, lesson in rows:
+        b = by_kind.setdefault(kind, {"count": 0, "high_conf": 0, "verdicts": {}})
+        b["count"] += 1
+        if conf >= 0.7:
+            b["high_conf"] += 1
+        b["verdicts"][verdict] = b["verdicts"].get(verdict, 0) + 1
+    return {"total": len(rows), "by_kind": by_kind,
+            "recent": [{"kind": r[0], "verdict": r[1], "confidence": r[2],
+                        "lesson": r[3]} for r in rows[:10]]}
+
+
 def lessons(limit: int = 100) -> dict:
     """跨轮经验：从全部交易聚合赢家/输家特征。"""
     with _db() as c:
@@ -140,7 +202,7 @@ def lessons(limit: int = 100) -> dict:
         loss_dims[_classify(r[2])] = loss_dims.get(_classify(r[2]), 0) + 1
     return {
         "total": len(rows), "wins": len(wins), "losses": len(losses),
-        "win_rate": round(len(wins) / len(rows), 3) if rows else 0.0,
+        "win_rate": len(wins) / len(rows) if rows else 0.0,
         "avg_hold_win": round(sum(r[1] for r in wins) / len(wins), 1) if wins else 0.0,
         "avg_hold_loss": round(sum(r[1] for r in losses) / len(losses), 1) if losses else 0.0,
         "win_dimensions": win_dims, "loss_dimensions": loss_dims,
@@ -167,13 +229,13 @@ def style_profile() -> dict:
     dom_dim = max(dims.items(), key=lambda kv: kv[1]) if dims else ("无", 0)
     dom_side = max(sides.items(), key=lambda kv: kv[1]) if sides else ("无", 0)
     profile = (f"累计 {len(rows)} 笔 · 净盈亏 {total_pnl:.0f} · 胜率 "
-               f"{round(sum(1 for p in pnls if p > 0) / len(pnls), 3):.1%} · "
+               f"{round(sum(1 for p in pnls if p > 0) / len(pnls), 4):.2%} · "
                f"平均持仓 {round(sum(holds) / len(holds), 1):.1f} 天 · "
                f"偏好{dom_side[0]}方向、{dom_dim[0]}策略 · 最佳 {best:.0f} / "
                f"最差 {worst:.0f}")
     return {"profile": profile,
             "stats": {"trades": len(rows), "net_pnl": round(total_pnl, 2),
-                      "win_rate": round(sum(1 for p in pnls if p > 0) / len(pnls), 3),
+                      "win_rate": sum(1 for p in pnls if p > 0) / len(pnls) if pnls else 0.0,
                       "avg_hold_days": round(sum(holds) / len(holds), 1),
                       "best_pnl": round(best, 2), "worst_pnl": round(worst, 2),
                       "dimensions": dims, "sides": sides}}
@@ -200,6 +262,92 @@ def recent_reflections(limit: int = 20) -> List[dict]:
             "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [{"trade_id": r[0], "dimension": r[1], "outcome": r[2],
              "insight": r[3], "ts": r[4]} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# FactorMiner 式 Alpha 因子发现 + AQuA 式递归自改进（模块增量）
+# ---------------------------------------------------------------------------
+
+def alpha_factors(limit: int = 200) -> List[dict]:
+    """从交易历史发现可解释 Alpha 因子（按策略维度聚合）。
+
+    每个因子 = 一个策略维度（趋势跟随/逆势抄底/纪律执行/消息驱动/择时波动），
+    输出 {factor, trades, win_rate, avg_pnl, avg_hold, net_pnl, verdict}：
+    - 强因子：样本 ≥5 且胜率 ≥0.6（可解释、可复用）；
+    - 负因子：样本 ≥5 且胜率 <0.4（应停用/加约束）；
+    - 观察因子：样本不足或胜率居中（继续积累样本）。
+    确定性规则，不依赖 LLM，可单测。
+    """
+    with _db() as c:
+        rows = c.execute(
+            "SELECT pnl,hold_days,reason FROM evo_trades ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
+    if not rows:
+        return []
+    factors: Dict[str, Dict[str, Any]] = {}
+    for pnl, hold, reason in rows:
+        dim = _classify(reason)
+        f = factors.setdefault(dim, {"trades": 0, "wins": 0, "pnl_sum": 0.0,
+                                     "hold_sum": 0.0})
+        f["trades"] += 1
+        f["pnl_sum"] += float(pnl)
+        f["hold_sum"] += float(hold)
+        if float(pnl) > 0:
+            f["wins"] += 1
+    out = []
+    for dim, f in sorted(factors.items(), key=lambda kv: -kv[1]["trades"]):
+        win_rate = f["wins"] / f["trades"] if f["trades"] else 0.0
+        verdict = ("强因子" if f["trades"] >= 5 and win_rate >= 0.6
+                   else "负因子" if f["trades"] >= 5 and win_rate < 0.4
+                   else "观察因子")
+        out.append({
+            "factor": dim, "trades": f["trades"], "wins": f["wins"],
+            "win_rate": round(win_rate, 4),
+            "avg_pnl": round(f["pnl_sum"] / f["trades"], 2) if f["trades"] else 0.0,
+            "avg_hold": round(f["hold_sum"] / f["trades"], 1) if f["trades"] else 0.0,
+            "net_pnl": round(f["pnl_sum"], 2), "verdict": verdict,
+        })
+    return out
+
+
+def _improvement_suggestion(f: Dict[str, Any]) -> str:
+    """按因子统计给出可执行改进建议（规则式，AQuA 递归自改进）。"""
+    if f["verdict"] == "强因子":
+        return (f"「{f['factor']}」胜率 {f['win_rate']:.0%}（样本 {f['trades']}），"
+                f"建议保持策略并逐步加仓，维持纪律执行。")
+    if f["verdict"] == "负因子":
+        return (f"「{f['factor']}」胜率仅 {f['win_rate']:.0%}（样本 {f['trades']}），"
+                f"建议停用该维度或强制附加止损/仓位上限后再观察。")
+    return (f"「{f['factor']}」胜率 {f['win_rate']:.0%}（样本 {f['trades']}），"
+            f"样本不足或收益不稳，建议限制仓位继续积累样本，避免过早下结论。")
+
+
+def recursive_improve(limit: int = 200) -> List[dict]:
+    """AQuA 式递归自改进：基于因子统计生成改进建议并落库。
+
+    写入 evo_improvements 表（id, factor, win_rate, trades, suggestion, ts），
+    形成「交易 → 反思 → 因子统计 → 改进建议」的闭环轨迹；返回本次建议列表。
+    """
+    factors = alpha_factors(limit)
+    if not factors:
+        return []
+    with _db() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS evo_improvements(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          factor TEXT, win_rate REAL, trades INTEGER,
+          suggestion TEXT, ts REAL
+        );
+        """)
+        for f in factors:
+            c.execute(
+                "INSERT INTO evo_improvements(factor,win_rate,trades,suggestion,ts)"
+                " VALUES(?,?,?,?,?)",
+                (f["factor"], f["win_rate"], f["trades"],
+                 _improvement_suggestion(f), time.time()))
+    return [{"factor": f["factor"], "win_rate": f["win_rate"],
+             "trades": f["trades"], "suggestion": _improvement_suggestion(f)}
+            for f in factors]
 
 
 if __name__ == "__main__":
@@ -232,5 +380,13 @@ if __name__ == "__main__":
     assert eq[-1] > eq[0]  # 净盈利
     refs = recent_reflections()
     assert len(refs) >= 2
+    # 模块增量：Alpha 因子 + 递归自改进
+    fs = alpha_factors()
+    assert isinstance(fs, list) and fs
+    assert all({"factor", "trades", "win_rate", "verdict"} <= set(f) for f in fs)
+    improved = recursive_improve()
+    assert isinstance(improved, list) and len(improved) == len(fs)
+    assert all(i["suggestion"] for i in improved)
     print(f"evo_memory self-check ok (trades={l['total']}, "
-          f"win_rate={l['win_rate']:.0%}, profile='{sp['profile'][:40]}…')")
+          f"win_rate={l['win_rate']:.0%}, factors={len(fs)}, "
+          f"improvements={len(improved)})")
