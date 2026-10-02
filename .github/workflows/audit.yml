@@ -22,29 +22,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      # PyQt6 的 offscreen 平台插件在 ubuntu runner 上需要系统图形库，
+      # 缺库会直接崩溃（qt.qpa.plugin: Could not load ... offscreen）。
+      - name: 安装 Qt offscreen 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
       - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 运行全量测试
+      - name: 运行全量测试（mock 数据 + offscreen）
         run: python -B tests/run_all.py
-      - name: 运行回测审计冒烟（8 条分级规则）
-        run: python -B - <<'PY'
-import os, sys
-sys.path.insert(0, ".")
-from core.quant.backtest_auditor import audit_strategy  # noqa: E402
-import pandas as pd
-# 构造一个最小 OHLCV 样本做审计冒烟（确定性规则，不进实盘）
-df = pd.DataFrame({
-    "date": pd.date_range("2024-01-01", periods=120, freq="D"),
-    "open": [100 + i * 0.1 for i in range(120)],
-    "high": [102 + i * 0.1 for i in range(120)],
-    "low": [98 + i * 0.1 for i in range(120)],
-    "close": [101 + i * 0.1 for i in range(120)],
-    "volume": [1000000] * 120,
-})
-report = audit_strategy(df, "smoke_strategy", {"ma_short": 5, "ma_long": 20})
-fatal = [r for r in report.get("results", []) if r.get("severity") == "critical"]
-print(f"audit rules checked={len(report.get('results', []))} critical={len(fatal)}")
-assert fatal, "回测审计必须返回 critical 级检查项"
-PY
+      - name: 运行回测审计（8 条分级规则 + 诚实 vs 偏差）
+        run: python -B scripts/ci_audit.py --json
