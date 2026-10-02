@@ -115,21 +115,38 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("app.title"))
         self.setObjectName("MainWindow")  # 供主题 QSS 背景图选择器使用
         self.resize(1200, 800)
-        # 恢复窗口位置（如果上次保存过）
+        # 恢复窗口位置（如果上次保存过，且尺寸合理在屏幕内）
         from PyQt6.QtCore import QSettings
         from PyQt6.QtGui import QGuiApplication
         settings = QSettings("Shuying", "ShuyingInsight")
-        geom = settings.value("geometry")
-        if geom:
-            self.restoreGeometry(geom)
-        else:
-            # 首次启动居中
-            screen = QGuiApplication.primaryScreen().availableGeometry()
+        _screen = QGuiApplication.primaryScreen().availableGeometry()
+        _geom = settings.value("geometry")
+        _geom_ok = False
+        if _geom:
+            try:
+                self.restoreGeometry(_geom)
+                _g = self.geometry()
+                _geom_ok = (
+                    640 <= _g.width() <= _screen.width() * 1.02
+                    and 480 <= _g.height() <= _screen.height() * 1.02
+                    and _g.right() >= _screen.left() and _g.left() <= _screen.right()
+                    and _g.bottom() >= _screen.top() and _g.top() <= _screen.bottom()
+                )
+            except Exception:  # noqa: BLE001
+                _geom_ok = False
+        if not _geom_ok:
+            # 首次启动 / 坏几何（超屏、负坐标、过小）：重置默认尺寸并居中
+            self.resize(1200, 800)
             self.move(
-                (screen.width() - self.width()) // 2,
-                (screen.height() - self.height()) // 2,
+                _screen.x() + (_screen.width() - 1200) // 2,
+                _screen.y() + (_screen.height() - 800) // 2,
             )
-        # 校验窗口在屏幕内
+            if _geom:
+                try:
+                    settings.setValue("geometry", self.saveGeometry())
+                except Exception:  # noqa: BLE001
+                    pass
+        # 校验窗口在屏幕内（show 后还会再校验一次）
         self._ensure_on_screen()
         import os as _os, sys as _sys
         _cands = []
@@ -192,6 +209,8 @@ class MainWindow(QMainWindow):
 
         # 中央标签页
         self.tabs = QTabWidget()
+        # 防止图表/表格组件的最小尺寸把主窗口撑爆、导致窗口无法缩小越界
+        self.tabs.setMinimumSize(600, 320)
         self.tabs.addTab(self.chat_tab, "对话分析")
         self.tabs.addTab(self.overview_tab, "市场概览")
         self.tabs.addTab(self.watchlist_tab, "自选股")
@@ -237,6 +256,7 @@ class MainWindow(QMainWindow):
         self.nav_dock.setFeatures(
             QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.nav_dock.setWidget(left_panel)
+        self.nav_dock.setMinimumSize(150, 240)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.nav_dock)
 
         # 右：信息面板（可浮动/关闭，可从菜单恢复）
@@ -248,6 +268,7 @@ class MainWindow(QMainWindow):
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
             | QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.info_dock.setWidget(right_panel)
+        self.info_dock.setMinimumSize(260, 240)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.info_dock)
         self.info_dock.resize(300, 700)
 
@@ -255,7 +276,19 @@ class MainWindow(QMainWindow):
         try:
             _st = QSettings("Shuying", "ShuyingInsight").value("dock_state")
             if _st:
-                self.restoreState(_st)
+                _restored = self.restoreState(_st)
+                # 校验：导航 dock 必须在左侧、信息面板在右侧且未漂移到中央
+                _nav_area = self.dockWidgetArea(self.nav_dock)
+                _info_area = self.dockWidgetArea(self.info_dock)
+                _info_float = self.info_dock.isFloating()
+                if (not _restored or _nav_area != Qt.DockWidgetArea.LeftDockWidgetArea
+                        or (_info_area != Qt.DockWidgetArea.RightDockWidgetArea
+                            and not _info_float and self.info_dock.isVisible())):
+                    # 恢复默认布局（导航左 / 信息右）
+                    self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,
+                                       self.nav_dock)
+                    self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
+                                       self.info_dock)
         except Exception:  # noqa: BLE001
             pass
 
@@ -333,9 +366,10 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QToolBar
         cmd_bar = QToolBar("命令中心")
         cmd_bar.setMovable(False)
+        cmd_bar.setFloatable(False)
         cmd_bar.setStyleSheet(
             "QToolBar{border:none; background:transparent; spacing:6px;}"
-            "QLineEdit{min-width:280px;}")
+            "QLineEdit{min-width:110px; max-width:420px;}")
         self.cmd_search = QLineEdit()
         self.cmd_search.setPlaceholderText("🔍 搜索股票代码 / 名称 / 拼音…（回车快速分析）")
         self.cmd_search.returnPressed.connect(self._on_top_search)
@@ -467,23 +501,50 @@ class MainWindow(QMainWindow):
             _tr("status.lang_switched") + f"（{LANGUAGES[nxt]}）", 6000)
 
     def _ensure_on_screen(self) -> None:
-        """确保窗口在可用屏幕区域内。"""
+        """确保窗口在可用屏幕区域内；越界/超大时收紧尺寸并回写修正值。
+
+        注意：restoreGeometry 的几何在窗口 show 之前不会反映到 geometry()，
+        因此本方法在 __init__ 与 showEvent 中都会被调用。
+        """
         from PyQt6.QtGui import QGuiApplication
-        screen = QGuiApplication.screenAt(self.geometry().center())
+        try:
+            screen = QGuiApplication.screenAt(self.geometry().center())
+        except Exception:  # noqa: BLE001
+            screen = None
         if screen is None:
             screen = QGuiApplication.primaryScreen()
         avail = screen.availableGeometry()
         g = self.geometry()
-        if g.right() > avail.right() or g.bottom() > avail.bottom() or g.left() < avail.left() or g.top() < avail.top():
-            self.setGeometry(
-                avail.x() + 50, avail.y() + 50,
-                min(1200, avail.width() - 100),
-                min(800, avail.height() - 100),
-            )
+        w = min(g.width(), avail.width())
+        h = min(g.height(), avail.height())
+        x = max(avail.left(), min(g.x(), avail.right() - w))
+        y = max(avail.top(), min(g.y(), avail.bottom() - h))
+        if (w, h, x, y) != (g.width(), g.height(), g.x(), g.y()):
+            self.setGeometry(x, y, w, h)
+            # 回写修正后的几何，避免下次启动再次恢复坏值
+            try:
+                from PyQt6.QtCore import QSettings
+                QSettings("Shuying", "ShuyingInsight").setValue(
+                    "geometry", self.saveGeometry())
+            except Exception:  # noqa: BLE001
+                pass
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        # restoreGeometry 的坏几何在 show 时才真正应用，必须在此兜底校验
+        try:
+            self._ensure_on_screen()
+        except Exception:  # noqa: BLE001
+            pass
 
     def closeEvent(self, event) -> None:
         from PyQt6.QtCore import QSettings
         settings = QSettings("Shuying", "ShuyingInsight")
+        # 先收紧越界几何再保存，避免下次启动恢复坏值
+        try:
+            self._ensure_on_screen()
+        except Exception:  # noqa: BLE001
+            pass
         settings.setValue("geometry", self.saveGeometry())
         # 模块一：保存停靠布局（Widget 工作区）
         try:
@@ -867,12 +928,24 @@ class MainWindow(QMainWindow):
         mode_row.addStretch(1)
         lay.addLayout(mode_row)
 
-        # 导航容器（切换模式时重建内部按钮）
+        # 导航容器（切换模式时重建内部按钮）；放入滚动区，
+        # 防止导航项过多把最小高度撑爆、导致窗口无法缩小/越界
         self.nav_container = QWidget()
         self.nav_vlay = QVBoxLayout(self.nav_container)
         self.nav_vlay.setContentsMargins(0, 0, 0, 0)
         self.nav_vlay.setSpacing(4)
-        lay.addWidget(self.nav_container)
+        from PyQt6.QtWidgets import QScrollArea
+        _nav_scroll = QScrollArea()
+        _nav_scroll.setWidgetResizable(True)
+        _nav_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _nav_scroll.setStyleSheet(
+            "QScrollArea{border:none; background:transparent;}"
+            "QScrollBar:vertical{width:6px; background:transparent;}"
+            "QScrollBar::handle:vertical{background:#30363D; border-radius:3px;}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical{height:0;}")
+        _nav_scroll.setMinimumHeight(120)
+        _nav_scroll.setWidget(self.nav_container)
+        lay.addWidget(_nav_scroll, 1)
         self._render_nav()
 
         # 券商官方开户入口
