@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -189,6 +190,192 @@ def predict_impact(entity: str, texts: List[str],
 
 def _nodes_dict(rows: List[Tuple[str, str, str]]) -> List[dict]:
     return [{"id": r[0], "layer": r[1], "label": r[2]} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# 模块五增强：FinKG-News 事件锚定 + HERMES 时序实体识别与动态演化
+# ---------------------------------------------------------------------------
+# 新增命名空间表，不改动既有 nodes/edges schema，保证已有自检与 UI 不受影响。
+_SCHEMA_EXT = """
+CREATE TABLE IF NOT EXISTS eg_anchor(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity TEXT, etype TEXT, adate TEXT, entities TEXT,
+  sentiment REAL, source TEXT, text TEXT, created TEXT
+);
+CREATE TABLE IF NOT EXISTS eg_tentity(
+  name TEXT PRIMARY KEY, kind TEXT, first_seen TEXT, last_seen TEXT, mentions INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_eg_anchor_entity ON eg_anchor(entity);
+CREATE INDEX IF NOT EXISTS idx_eg_anchor_date ON eg_anchor(adate);
+"""
+
+# 各类实体的正则（HERMES 风格规则 NER，best-effort）：
+# - company：已知 A股公司名 / 1~6 个汉字 + 机构后缀词
+# - person：职务/角色词（作为人物实体）
+# - macro：宏观主体/指标关键词（本身即实体）
+# - industry：行业关键词（本身即实体）
+_ENTITY_PATTERNS = [
+    ("company", r"[\u4e00-\u9fa5]{1,6}(?:公司|集团|股份|银行|证券|科技|医药|传媒|地产|控股)"),
+    ("person", r"(?:董事长|总裁|CEO|创始人|实控人|总经理|董秘)"),
+    ("macro", r"(?:央行|美联储|国务院|证监会|发改委|财政部|GDP|CPI|PPI|LPR|存款准备金|利率|汇率|货币政策)"),
+    ("industry", r"(?:新能源|半导体|光伏|锂电池|人工智能|芯片|白酒|医药|房地产|券商|汽车|消费电子|军工|养殖)"),
+]
+# A股常见公司别名（无机构后缀时的精确匹配）
+_KNOWN_COMPANIES = {
+    "贵州茅台", "茅台", "五粮液", "宁德时代", "比亚迪", "中国平安", "平安银行",
+    "招商银行", "工商银行", "建设银行", "农业银行", "隆基绿能", "京东方", "美的集团",
+    "格力电器", "伊利股份", "海康威视", "立讯精密", "三一重工", "中信证券",
+    "东方财富", "药明康德", "迈瑞医疗", "长江电力", "中国中车", "中芯国际",
+}
+_POS = ("增长", "预增", "增持", "利好", "签约", "中标", "补贴", "盈利", "回暖", "新高")
+_NEG = ("预减", "减持", "暴雷", "亏损", "处罚", "诉讼", "下滑", "违约", "退市", "利空")
+
+
+def _norm_date(s) -> str:
+    import re as _re
+    t = str(s or "")
+    m = _re.search(r"(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})", t)
+    return f"{m.group(1)}{int(m.group(2)):02d}{int(m.group(3)):02d}" if m else ""
+
+
+def recognize_entities(text: str) -> List[dict]:
+    """HERMES 风格时序实体识别（规则 NER）：返回 [{name, kind}]。
+
+    覆盖公司/人物/宏观主体/行业四类，供事件锚定到具体实体（FinKG-News）。
+    """
+    import re as _re
+    out: List[dict] = []
+    seen = set()
+    # 1) 已知公司名（最长优先，避免"茅台"被"贵州茅台"拆开）
+    for name in sorted(_KNOWN_COMPANIES, key=len, reverse=True):
+        if name in text and name not in seen:
+            seen.add(name)
+            out.append({"name": name, "kind": "company"})
+    # 2) 各类正则（跳过已匹配公司名的子串，如"茅台"被"贵州茅台"覆盖）
+    for kind, pat in _ENTITY_PATTERNS:
+        for m in _re.finditer(pat, text):
+            name = m.group(0).strip()
+            if not name or name in seen:
+                continue
+            if any(name in s for s in seen):
+                continue
+            seen.add(name)
+            out.append({"name": name, "kind": kind})
+    return out
+
+
+def _sentiment(text: str) -> float:
+    pos = sum(text.count(w) for w in _POS)
+    neg = sum(text.count(w) for w in _NEG)
+    return round((pos - neg) / max(1, pos + neg), 3)
+
+
+def _record_entity(c, name: str, kind: str, as_of: str) -> None:
+    row = c.execute("SELECT first_seen, mentions FROM eg_tentity WHERE name=?", (name,)).fetchone()
+    if row is None:
+        c.execute("INSERT INTO eg_tentity(name,kind,first_seen,last_seen,mentions) VALUES(?,?,?,?,1)",
+                  (name, kind, as_of, as_of))
+    else:
+        c.execute("UPDATE eg_tentity SET last_seen=?, mentions=?, kind=? WHERE name=?",
+                  (as_of, row[1] + 1, kind, name))
+
+
+def anchor_event(entity: str, text: str, date: str | None = None,
+                source: str = "") -> dict:
+    """FinKG-News 风格事件锚定：把一条新闻锚定到 (日期, 实体, 情感, 来源)。
+
+    返回锚定记录 {id, entity, etype, date, entities, sentiment, source, text}。
+    """
+    from memory.event_extractor import extract_event_type
+    label, _ = extract_event_type(text)
+    as_of = _norm_date(date or "")
+    ents = recognize_entities(text)
+    sent = _sentiment(text)
+    with _db_ext() as c:
+        c.executescript(_SCHEMA_EXT)
+        cur = c.execute(
+            "INSERT INTO eg_anchor(entity,etype,adate,entities,sentiment,source,text,created)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (entity, label, as_of, json.dumps(ents, ensure_ascii=False), sent, source,
+             text[:200], datetime.now().isoformat(timespec="seconds")))
+        aid = cur.lastrowid
+        for e in ents:
+            _record_entity(c, e["name"], e["kind"], as_of or "19700101")
+    return {"id": aid, "entity": entity, "etype": label, "date": as_of,
+            "entities": ents, "sentiment": sent, "source": source, "text": text[:200]}
+
+
+def build_from_news_stream(entity: str, items: List[dict]) -> dict:
+    """批量锚定新闻流（HERMES 动态演化输入）。
+
+    items=[{text, date(可选), source(可选)}]。返回 {anchored, entities}。
+    """
+    anchored, names = 0, set()
+    for it in (items or []):
+        a = anchor_event(entity, it.get("text", ""), it.get("date"), it.get("source", ""))
+        anchored += 1
+        for e in a["entities"]:
+            names.add(e["name"])
+    return {"anchored": anchored, "entities": sorted(names)}
+
+
+def evolve(entity: str, as_of: str, half_life_days: int = 30) -> dict:
+    """HERMES 动态演化：按锚定事件日期对实体/事件做时间衰减权重。
+
+    返回 {as_of, half_life_days, alive_entities, stale_entities, recent_events}：
+    - alive：最近 half_life 内有提及的实体；
+    - stale：超过 2×half_life 无提及的实体（知识演化淘汰）；
+    - recent_events：as_of 前 half_life 内的锚定事件数。
+    """
+    ao = _norm_date(as_of) or ""
+    with _db_ext() as c:
+        c.executescript(_SCHEMA_EXT)
+        rows = c.execute(
+            "SELECT name, last_seen, mentions FROM eg_tentity WHERE name IN "
+            "(SELECT DISTINCT json_extract(json_each.value, '$.name') FROM eg_anchor, "
+            "json_each(eg_anchor.entities) WHERE eg_anchor.entity=?)",
+            (entity,)).fetchall()
+    alive, stale = [], []
+    for name, last_seen, _m in rows:
+        if not ao or not last_seen:
+            alive.append(name); continue
+        age = (int(ao) - int(last_seen)) if ao.isdigit() and last_seen.isdigit() else 9999
+        (alive if age <= half_life_days else (stale if age > 2 * half_life_days else alive)).append(name)
+    return {"as_of": ao, "half_life_days": half_life_days,
+            "alive_entities": alive, "stale_entities": stale,
+            "entity_count": len(rows)}
+
+
+@contextmanager
+def _db_ext():
+    _DB.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(_DB))
+    try:
+        c.executescript(_SCHEMA_EXT)
+        yield c
+        c.commit()
+    finally:
+        c.close()
+
+
+def query_anchored(entity: str, since: str | None = None,
+                   sentiment_le: float | None = None) -> List[dict]:
+    """查询某标的的锚定事件（可按日期下限 / 情感阈值过滤）。"""
+    with _db_ext() as c:
+        c.executescript(_SCHEMA_EXT)
+        sql = "SELECT id, etype, adate, entities, sentiment, source, text FROM eg_anchor WHERE entity=?"
+        args = [entity]
+        if since:
+            sql += " AND adate>=?"
+            args.append(_norm_date(since))
+        if sentiment_le is not None:
+            sql += " AND sentiment<=?"
+            args.append(sentiment_le)
+        sql += " ORDER BY adate DESC, id DESC"
+        rows = c.execute(sql, args).fetchall()
+    return [{"id": r[0], "etype": r[1], "date": r[2],
+             "entities": json.loads(r[3]) if r[3] else [], "sentiment": r[4],
+             "source": r[5], "text": r[6]} for r in rows]
 
 
 if __name__ == "__main__":

@@ -89,16 +89,32 @@ def guard_bars(df, as_of: str) -> pd.DataFrame:
     return df[df.index <= pd.Timestamp(_norm_date(as_of))]
 
 
-def guard_data(tool: str, payload: object, as_of: str) -> Dict[str, object]:
+def guard_data(tool: str, payload: object, as_of: str,
+               source: Optional[str] = None) -> Dict[str, object]:
     """守卫一次工具调用：返回 {allowed, filtered, reason, data}。
 
     - allowed：调用是否放行（as_of 缺失即放行并标注 untested）。
     - filtered：被剔除的未来时点记录数。
     - data：剔除后的数据（dict/list 深拷贝后原地过滤）。
+    - source：数据源名（quote/bars/news/filing/financial/macro/social/
+      decision_log）。给定时走 `core.pit_sources` 的**字段级严格守卫**：
+      财报类只认公告/披露日，缺失可用日期字段即阻断放行（防 30~90 天前视）。
     """
     if not as_of:
         return {"allowed": True, "filtered": 0, "reason": "as_of 未设置（不作过滤）",
                 "data": payload}
+
+    if source:
+        try:
+            from core.pit_sources import guard_source as _guard_source
+            r = _guard_source(source, payload, as_of)
+            r.setdefault("source", source)
+            if r.get("field"):
+                r["reason"] = f"{r.get('reason','')} [源={source}]"
+            return r
+        except Exception as e:  # noqa: BLE001
+            log.warning("源级 PIT 守卫降级为通用过滤: %s", e)
+
     as_of_n = _norm_date(as_of)
     dates: List[str] = []
     _extract_dates(payload, dates)

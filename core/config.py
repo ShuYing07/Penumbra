@@ -213,6 +213,7 @@ def is_market_open(market: str, now: datetime | None = None) -> bool:
     - CN：周一~五 9:30-11:30 / 13:00-15:00
     - HK：周一~五 9:30-12:00 / 13:00-16:00（港股本地时间=北京时间）
     - US：周一~五；夏令时北京 21:30~次日 04:00，冬令时 22:30~次日 05:00
+    - JP/KR/TW：本地 UTC+9/+9/+8，已折算为北京时间（见 MARKET_META）
     - CRYPTO：恒 True；其他（GLOBAL/UNKNOWN）：False
     """
     now = now or now_cn()
@@ -237,7 +238,56 @@ def is_market_open(market: str, now: datetime | None = None) -> bool:
         if hm < close_min:
             return (wd - 1) % 7 < 5           # 凌晨段：前一日须工作日
         return False
+    if market in ("JP", "KR", "TW"):
+        # 本地交易时段已折算为北京时间（MARKET_META 内 sip 字段）
+        sess = MARKET_META[market]["sessions_bj"]
+        if wd >= 5:
+            return False
+        return any(a <= hm < b for a, b in sess)
     return False
+
+
+# ---------------------------------------------------------------------------
+# 市场注册表（任务书B·模块二：日股/韩股数据源支持评估）
+# 时区与交易时段统一折算为北京时间（hm = 时*60+分），便于 is_market_open 单一口径。
+# 数据来源：JP/KR/TW/HK/US/GLOBAL 均走 yfinance 全球源（免费、覆盖最广）；
+# 若后续需更高频/更深历史，可在此登记付费备源（如 JPX、KRX、TWSE 官方）。
+# ---------------------------------------------------------------------------
+MARKET_META: dict[str, dict] = {
+    "CN": {"name_zh": "A股", "name_en": "China A", "currency": "CNY",
+           "tz": "Asia/Shanghai", "code_fmt": "SH600519 / SZ000001",
+           "sessions_bj": [(570, 690), (780, 900)]},
+    "HK": {"name_zh": "港股", "name_en": "Hong Kong", "currency": "HKD",
+           "tz": "Asia/Hong_Kong", "code_fmt": "0700.HK / 00700.HK",
+           "sessions_bj": [(570, 720), (780, 960)]},
+    "US": {"name_zh": "美股", "name_en": "US", "currency": "USD",
+           "tz": "America/New_York", "code_fmt": "AAPL / MSFT",
+           "sessions_bj": [(1290, 1440), (0, 300)]},
+    "JP": {"name_zh": "日股", "name_en": "Japan (TSE)", "currency": "JPY",
+           "tz": "Asia/Tokyo", "code_fmt": "7203.T（丰田）/ 6758.T（索尼）",
+           # 东京 09:00-11:30 / 12:30-15:00 JST = 北京 08:00-10:30 / 11:30-14:00
+           "sessions_bj": [(480, 630), (690, 840)]},
+    "KR": {"name_zh": "韩股", "name_en": "Korea (KRX)", "currency": "KRW",
+           "tz": "Asia/Seoul", "code_fmt": "005930.KS（三星）/ 000660.KS（海力士）",
+           # 首尔 09:00-15:30 KST = 北京 08:00-14:30（连续交易，无午休）
+           "sessions_bj": [(480, 870)]},
+    "TW": {"name_zh": "台股", "name_en": "Taiwan (TWSE)", "currency": "TWD",
+           "tz": "Asia/Taipei", "code_fmt": "2330.TW（台积电）",
+           # 台北 09:00-13:30 = 北京 09:00-13:30（UTC+8 同）
+           "sessions_bj": [(540, 810)]},
+    "GLOBAL": {"name_zh": "全球(其它)", "name_en": "Global", "currency": "USD",
+               "tz": "UTC", "code_fmt": "<code>.<EXCH>",
+               "sessions_bj": []},
+    "CRYPTO": {"name_zh": "加密货币", "name_en": "Crypto", "currency": "USD",
+               "tz": "UTC", "code_fmt": "BTC-USD / ETH-USD",
+               "sessions_bj": [(0, 1440)]},
+}
+
+
+def market_meta(market: str) -> dict:
+    """取市场元信息（无则回退 GLOBAL）。"""
+    return MARKET_META.get(market, MARKET_META["GLOBAL"])
+
 
 
 def refresh_interval(market: str, now: datetime | None = None) -> int:

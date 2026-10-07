@@ -10,7 +10,7 @@ pydantic v2（随 fastapi 安装），BaseModel + Field(description=...) 的
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -78,6 +78,23 @@ class ScreenerIn(BaseModel):
     chg_min: Optional[float] = Field(default=None, description="涨跌幅下限(%)")
     chg_max: Optional[float] = Field(default=None, description="涨跌幅上限(%)")
     limit: int = Field(default=20, ge=1, le=100, description="最多返回条数")
+
+
+class ChartControlIn(BaseModel):
+    """图表 AI 控制面指令（MCP 兼容）：增删指标/绘图、切换周期、重置。
+
+    仅做图表展示控制，不产出任何荐股/目标价/收益承诺（合规）。
+    """
+    ticker: str = Field(default="", description="标的代码（如 SH600519），留空作用于当前图")
+    action: str = Field(description=(
+        "指令：add_indicator / remove_indicator / add_drawing / remove_last_drawing "
+        "/ set_timeframe / set_ticker / reset"))
+    id: Optional[str] = Field(default=None, description="指标 id（add/remove_indicator 用）")
+    tool: Optional[str] = Field(default=None, description="绘图工具 id（add_drawing 用）")
+    tf: Optional[str] = Field(default=None, description="周期：1m/5m/15m/30m/1h/1d/1w/1mo")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="指标参数字典")
+    points: Optional[List[Dict[str, Any]]] = Field(default=None, description="绘图点列表[{x,y}]")
+    meta: Optional[Dict[str, Any]] = Field(default=None, description="绘图附加元数据")
 
 
 # ---------------------------------------------------------------------------

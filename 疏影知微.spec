@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 import os, glob
 
 # 只打包 data 里的静态索引 json（all_stocks.json / a_stocks.json）。
@@ -16,6 +16,11 @@ if os.path.exists('config.yaml'):
 
 binaries = []
 hiddenimports = []
+# app 包整体收集：app.main / app.ui.* 大量使用函数内延迟 import，
+# 静态分析易漏（历史上曾因 main_window 缺失导致启动即崩），
+# collect_submodules 一网打尽，彻底杜绝 ModuleNotFoundError
+hiddenimports += collect_submodules('app')
+hiddenimports += collect_submodules('config_manager')
 tmp_ret = collect_all('akshare')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('py_mini_racer')
@@ -74,6 +79,12 @@ hiddenimports += [
     'core.quant.audit_rules8', 'core.research_skills',
     'core.distilled_knowledge', 'core.knowledge_distiller',
     'streaming.stream_checkpoint',
+    # 本轮（第17轮）新增模块（均为函数内延迟 import，须显式收集）
+    'core.chart_engine', 'core.data_connector', 'core.multimodal_parser',
+    'core.pit_sources', 'core.compliance_qa', 'core.model_tier',
+    # PyQt6 UI 组件（必须显式收集）
+    'PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui',
+    'PyQt6.sip',
 ]
 
 
@@ -83,8 +94,10 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=['PyInstaller/hooks'],
     hooksconfig={},
+    upx=True,
+    console=False,
     runtime_hooks=[],
     # 打包瘦身：Kronos 运行时走 py_mini_racer(V8)，torch 仅训练脚本使用 → 排除；
     # 同时排除未使用的科学计算/笔记本大依赖（不含 matplotlib/pandas——程序在用）

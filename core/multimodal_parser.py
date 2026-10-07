@@ -328,3 +328,50 @@ if __name__ == "__main__":
                           if k not in ("text", "transcript")}, ensure_ascii=False, indent=2))
     else:
         print("用法：python core/multimodal_parser.py <file>")
+
+
+# ---------------------------------------------------------------------------
+# 4) 行情/表格截图 → CSV 提取（模块二·图片导入）
+# 视觉 LLM 把图内表格转成纯 CSV 文本；离线/无视觉模型时返回 ""，由调用方兜底。
+# ---------------------------------------------------------------------------
+def extract_image_table(image_path: str) -> str:
+    """从行情/表格截图提取 CSV 文本（列：date,open,high,low,close,volume）。
+
+    - 视觉 LLM 优先：要求只输出表头+数据行，不夹带解释；
+    - 失败或离线返回 ""（调用方可据此提示用户改用 CSV/剪贴板导入）。
+    """
+    path = Path(image_path)
+    if not path.exists():
+        return ""
+    prompt = (
+        "你是表格数据提取器。请读取图中的行情/财务表格，"
+        "只输出 CSV 文本，第一行表头须为：date,open,high,low,close,volume"
+        "（如缺成交量列可省略 volume）。日期格式 YYYY-MM-DD。"
+        "不要任何解释、不要代码块标记。若图中无表格，输出单词 NONE。")
+    text = _llm_chat_vision(prompt, str(path))
+    if not text:
+        return ""
+    text = text.strip().strip("`").strip()
+    if text.upper() == "NONE" or "date" not in text.lower():
+        return ""
+    # 去掉可能的 ```csv ... ``` 围栏
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+# 供 data_connector 统一归一化时复用
+def image_to_ohlcv_df(image_path: str) -> "pd.DataFrame | None":
+    """图片→OHLCV DataFrame（失败返回 None）。"""
+    csv_text = extract_image_table(image_path)
+    if not csv_text:
+        return None
+    try:
+        from core.data_connector import parse_clipboard_table
+        return parse_clipboard_table(csv_text)
+    except Exception as e:  # noqa: BLE001
+        log.warning("图片表格归一化失败 %s: %s", image_path, str(e)[:80])
+        return None
+

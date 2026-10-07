@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QTableWidget, QTableWidgetItem, QPushButton,
                              QLineEdit, QFileDialog, QMessageBox, QSplitter)
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 from app.ui.ui_theme import BG_CARD, BORDER, TEXT_MAIN, TEXT_SUB, ACCENT
 
@@ -69,6 +70,17 @@ class DataSourceTab(QWidget):
         btn_file.clicked.connect(self._import_file)
         row2.addWidget(btn_file)
         rl.addLayout(row2)
+
+        # 第三行：剪贴板 / 图片 导入
+        row3 = QHBoxLayout()
+        btn_clip = QPushButton("📋 剪贴板导入")
+        btn_clip.clicked.connect(self._import_clipboard)
+        row3.addWidget(btn_clip)
+        btn_img = QPushButton("🖼 图片导入")
+        btn_img.clicked.connect(self._import_image)
+        row3.addWidget(btn_img)
+        rl.addLayout(row3)
+
         self.import_log = QLabel("（未导入）")
         self.import_log.setStyleSheet(
             f"background:{BG_CARD}; border:1px solid {BORDER}; border-radius:8px;"
@@ -133,12 +145,51 @@ class DataSourceTab(QWidget):
             QMessageBox.warning(self, "提示", "请先填写标的代码")
             return
         try:
-            from core.data_connector import parse_csv, parse_excel, import_to_cache
+            from core.data_connector import parse_csv, parse_excel
             df = parse_csv(path) if path.lower().endswith(".csv") else parse_excel(path)
-            n = import_to_cache(df, ticker)
-            self.import_log.setText(
-                f"✅ 导入成功：{path}\n{ticker} 共 {n} 行\n"
-                f"日期 {df.index.min().date()} ~ {df.index.max().date()}\n"
-                f"可直接在 K线图/回测 中使用 {ticker}")
+            self._do_import(df, ticker, path)
         except Exception as e:  # noqa: BLE001
             self.import_log.setText(f"❌ 导入失败：{type(e).__name__}: {e}")
+
+    def _do_import(self, df, ticker: str, src_label: str) -> None:
+        """统一执行导入到缓存并刷新日志。"""
+        n = import_to_cache(df, ticker)
+        self.import_log.setText(
+            f"✅ 导入成功：{src_label}\n{ticker} 共 {n} 行\n"
+            f"日期 {df.index.min().date()} ~ {df.index.max().date()}\n"
+            f"可直接在 K线图/回测 中使用 {ticker}")
+
+    def _import_clipboard(self) -> None:
+        ticker = self.ticker_edit.text().strip()
+        if not ticker:
+            QMessageBox.warning(self, "提示", "请先填写标的代码")
+            return
+        text = QApplication.clipboard().text()
+        if not text.strip():
+            QMessageBox.information(self, "提示", "剪贴板为空，请先复制表格数据")
+            return
+        try:
+            from core.data_connector import parse_clipboard_table
+            df = parse_clipboard_table(text)
+            self._do_import(df, ticker, "剪贴板")
+        except Exception as e:  # noqa: BLE001
+            self.import_log.setText(f"❌ 剪贴板导入失败：{type(e).__name__}: {e}")
+
+    def _import_image(self) -> None:
+        ticker = self.ticker_edit.text().strip()
+        if not ticker:
+            QMessageBox.warning(self, "提示", "请先填写标的代码")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择行情/表格截图", "",
+            "图片 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)")
+        if not path:
+            return
+        try:
+            from core.data_connector import parse_image_ohlcv
+            df = parse_image_ohlcv(path)
+            self._do_import(df, ticker, path)
+        except Exception as e:  # noqa: BLE001
+            self.import_log.setText(
+                f"❌ 图片导入失败：{type(e).__name__}: {e}\n"
+                f"（图片导入依赖视觉模型；可改用 CSV / 剪贴板 导入）")

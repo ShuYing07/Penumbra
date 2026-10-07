@@ -16,7 +16,8 @@ class _FakeCompletions:
     def __init__(self, client):
         self._c = client
 
-    def create(self, model, messages, temperature, max_tokens):
+    def create(self, model, messages, temperature, max_tokens, timeout=None):
+        # timeout 与真实 OpenAI SDK 对齐（chat() 会传入），避免 TypeError
         _FAKE_CALLS.append((self._c.base_url, model, max_tokens))
         resp = types.SimpleNamespace(choices=[
             types.SimpleNamespace(message=types.SimpleNamespace(content="测试回复"))])

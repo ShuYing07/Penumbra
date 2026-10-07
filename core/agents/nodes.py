@@ -15,6 +15,9 @@ def _run(runner, node: str, system: str, user: str, schema):
     """调 LLM + 校验；任何异常降级，绝不让单节点拖垮整条管线。"""
     try:
         data = runner.chat_json(node, system, user)
+        if data is None or not isinstance(data, dict):
+            # 模型未返回结构化结果：直接走降级，避免无谓的校验异常噪声
+            return schema.degraded(node, "empty_response")
         return schema.model_validate(data)
     except Exception as e:  # noqa: BLE001
         log.warning("节点 %s 降级: %s", node, str(e)[:160])

@@ -39,6 +39,7 @@
 | 14 | UI/UX 终极升级（布局/暗色玻璃态/命令面板/浮动AI；2026-10 起纯玻璃拟态无背景图） | TradingView / Robinhood / OpenTerminal / VoidAssets | ✅ |
 | 15 | 全板块极致 + AI 模型极致升级（2026 前沿模型路由 + 自主学习） | Ling-3.0-flash-Fin（Finance Agent v2 榜首）/ Qwen3.5 / DeepSeek-V4 | ✅ |
 | 16 | 审计八规则深化 + 管道断点续传 + 投研 Skill 化 + 知识蒸馏库 | fin-skills 五门审计 / 东吴证券 Skill 化 / Bonferroni 校正 | ✅ |
+| 17 | Agent 工具层 + 多智能体并行 + 事件图谱 + 回测审计 + 实时管道 + 多模态 + 可观测性 + 自进化 + 评测 + 合规治理 + UI + 工程（12 模块 + 7 追加：推理优化/数据扩展/审计深化/可视化/图谱增强/合规/工程） | TradingAgents v0.6/v0.5 / VA-NSF / FinKG-News / HERMES / Vela / fast-financial-charts | ✅（本轮收尾） |
 
 ---
 
@@ -156,6 +157,16 @@
 | 评测 | `core/eval/` | eval_framework / benchmark / suite |
 | 模拟盘 | `core/portfolio/paper.py` | 高保真订单引擎（市价/限价/止损） |
 | 财报卡片 | `core/report_summary_card.py`（2026-10 新建） | 摘要卡片 + 多期对比 + 同行雷达 |
+| 模型层级分离 | `core/model_tier.py` | provider per model tier：flagship/balanced/lite 三档 + 角色映射 + 自动降级（2026-10） |
+| 模型路由（延迟加载） | `core/model_router.py` | 惰性客户端缓存 + `STOCKAI_MOCK` 短路；OpenAI 兼容 10+ 平台 + 视觉 |
+| 合规全量质检 | `core/compliance_qa.py`（本轮新建） | 12 约束标注集 100% 召回 + 0 误报闸门 + 本地 SLM 评估 |
+| 实时护栏 | `security/nsf_verifier.py` | 神经符号 12 约束 + 流式增量校验（guard_stream/check_incremental） |
+| 可视化引擎 | `core/chart_engine.py`（本轮新建） | 101 命名指标 + 47 绘图工具 + MCP 兼容 AI 控制面（原生内核，无 QtWebEngine 依赖） |
+| 多市场 | `core/config.py` MARKET_META + `core/data/service.py` | JP/KR/TW 路由 + 北京时折算 + 默认可用性 |
+| 数据导入 | `core/data_connector.py` + `core/multimodal_parser.py` | CSV/TSV/Excel/剪贴板 + 图片→CSV（视觉 LLM） |
+| 策略信号 | `core/quant/backtest.py` STRATEGIES | 16 种策略（含买入持有）+ 参数化信号 |
+| PIT 全源 | `core/pit_sources.py` + `core/pit_guard.py` | 8 源截断 + 财报三日期陷阱 + 字段级严格守卫 |
+| 事件图谱增强 | `core/event_graph.py` | FinKG-News 事件锚定 + HERMES 时序实体识别与动态演化（alive/stale） |
 
 ---
 
@@ -205,12 +216,13 @@ zolva、kbot-finance（哈希链审计）、财跃星辰评测框架
 ## 6. 测试与验证
 
 ```powershell
-# 全量回归（75/75）
+# 全量回归（79/79 测试文件，新增 test_compliance_qa.py 等）
 $env:STOCKAI_MOCK=1; $env:QT_QPA_PLATFORM="offscreen"
 venv\Scripts\python.exe -B tests\run_all.py
 
 # 关键单测
 tests\test_model_router2.py     # 任务路由/2026 平台（8 项）
+tests\test_model_tier.py        # 模型层级分离 + 惰性客户端缓存 + MOCK 短路（9 项）
 tests\test_lookahead_scanner.py # 前视扫描分级审计（5 项）
 tests\test_audit_rules8.py      # 八条可计算审计规则（9 项，2026-10）
 tests\test_stream_checkpoint.py # 锚点持久化+断点续传+5秒滚动窗口（9 项，2026-10）
@@ -220,11 +232,18 @@ tests\test_report_summary_card.py # 财报卡片（5 项）
 tests\test_evo_analysis_reflect.py # 自主学习闭环（4 项）
 tests\test_paper_order.py       # 高保真订单引擎（11 项）
 tests\test_eval_framework.py    # 评测框架（11 项）
+tests\test_chart_engine.py      # 可视化引擎：101 指标 + 47 绘图工具 + AI 控制面（5 项）
+tests\test_event_graph_ext.py   # 事件图谱增强：FinKG-News 锚定 + HERMES 演化（6 项）
+tests\test_data_import.py       # 数据导入：CSV/TSV/Excel/剪贴板/图片（11 项）
+tests\test_markets.py           # 多市场 JP/KR/TW 路由 + 时段折算（15 项）
+tests\test_strategies_15.py     # 15+ 策略信号与回测（16 项）
+tests\test_pit_sources.py       # PIT 全源守卫（10 项）
+tests\test_compliance_qa.py     # 合规全量质检：12 约束 100% 召回 + 0 误报（5 项）
 tests\test_ui_smoke.py          # UI 冒烟（37 标签页）
 ```
 
 验证纪律：确定性规则必有单测；LLM 调用一律 mock；UI 改动 offscreen 渲染验证；
-打包验证 `ShuyingInsight.spec` datas 配置正确（背景为纯玻璃拟态，无背景图片；`assets/bg/` 仅作历史资产保留，不参与渲染）。
+打包验证 `疏影知微.spec`（有效 spec，产出 `dist\疏影知微\疏影知微.exe`；`ShuyingInsight.spec` 为旧简版）datas 配置正确（背景为纯玻璃拟态，无背景图片；`assets/bg/` 仅作历史资产保留，不参与渲染）。
 
 ---
 
@@ -240,6 +259,42 @@ tests\test_ui_smoke.py          # UI 冒烟（37 标签页）
 | PaddleOCR-VL-1.5 / 本地视觉模型 | 可选 | 多模态默认走云端视觉或 Ollama qwen3-vl |
 | QuestDB 替换 SQLite | 评估完成未迁移 | 见 `docs/QUESTDB_EVALUATION.md` |
 | 全量知识蒸馏进本地模型 | **不可行** | 需几十 GB 权重+版权语料；替代=进化记忆/学习库/RAG/Ling 金融引擎 |
+
+---
+
+## 9. 第 17 轮优化落地记录（2026-10-07）
+
+**本轮主题**：12 模块极致优化（Agent工具层+多智能体并行+事件图谱+回测审计+实时管道+多模态+可观测性+自进化+评测+合规治理+UI+工程）+ 7 追加（推理优化/数据扩展/审计深化/可视化/图谱增强/合规/工程）
+
+### 落地清单
+
+| 模块 | 关键文件 | 验证状态 | 备注 |
+|---|---|---|---|
+| **Agent工具层** | `agent/schemas.py`<br>`agent/tool_defs.py`<br>`agent/agent_core.py` | ✅ | MCP兼容控制面（Pydantic Schema）<br>AI推理可观测性（THINKING/TOOL_CALL/REASONING/FINAL_REPORT 事件）<br>多智能体投研团队（7分析师+并行执行组） |
+| **多智能体并行** | `core/agents/analyst_team.py`<br>`tests/test_analyst_team.py` | ✅ | ThreadPoolExecutor + LLM to_thread<br>数据组（4）→综合组（3）→多空辩论→组合经理 |
+| **事件图谱** | `core/event_graph.py`<br>`app/ui/event_graph_tab.py` | ✅ | FinKG-News 事件锚定<br>HERMES 动态演化（时间衰减权重） |
+| **回测审计** | `core/quant/audit_rules8.py`<br>`core/quant/backtest.py` | ✅ | 8条可计算审计规则 + honest_vs_inflated<br>多市场交易成本（JP/KR/TW） |
+| **实时管道** | `streaming/stream_checkpoint.py`<br>`streaming/stream_processor.py` | ✅ | CheckpointStore/ResumeManager/TumblingWindow<br>幂等去重+24h窗口封顶 |
+| **多模态** | `core/multimodal_parser.py`<br>`core/data_connector.py` | ✅ | 图表/PDF/音频解析<br>clipboard/image 数据导入 |
+| **可观测性** | `agent/agent_events.py`<br>`agent/agent_trace_store.py` | ✅ | Execution Console 三模式<br>事件持久化+UI 可视化 |
+| **自进化** | `core/agents/evo_memory.py`<br>`core/agents/research_skills.py` | ✅ | analyze_reflect 自动反思<br>factor_iteration/kline_pattern_search/deep_research 投研技能 |
+| **评测** | `core/eval/`<br>`tests/test_*.py` | ✅ | 79/75 全绿<br>回测/策略/数据/合规/Agent 全面覆盖 |
+| **合规治理** | `core/compliance_qa.py`<br>`tests/test_compliance_qa.py` | ✅ | 17样本QA + 12硬约束<br>GATE PASS（100%召回/0%误报） |
+| **UI** | `app/ui/`（含玻璃拟态/命令面板/浮动AI） | ✅ | 高保真模拟盘<br>意图驱动交互 |
+| **工程** | `core/update_checker.py`<br>`tests/test_update_checker_offline.py` | ✅ | 统一更新检查入口<br>离线单元测试覆盖 |
+
+### 新增模块地图
+
+- `core/quant/audit_rules8.py`：8条可计算审计规则 + honest_vs_inflated
+- `streaming/stream_checkpoint.py`：CheckpointStore/ResumeManager/TumblingWindow
+- `core/research_skills.py`：factor_iteration/kline_pattern_search/deep_research
+- `core/distilled_knowledge.py` + `core/knowledge_distiller.py`：58条×15领域蒸馏知识库
+
+### AI 资源
+
+- 云端 LLM 走 OpenAI 兼容端点，换平台只改 `.env` 的 key/base_url/model
+- 国内服务须 `httpx.Client(trust_env=False)` 绕代理
+- 全量知识蒸馏进权重不可行（知识库§7已论证），替代=蒸馏知识库+RAG+evo_memory
 
 ---
 

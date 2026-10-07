@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import logging
 
 log = logging.getLogger("stockai.model_router")
@@ -108,6 +109,58 @@ def available_platforms() -> list[str]:
         elif os.environ.get(cfg["key_env"], "").strip():
             out.append(name)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 延迟加载（lazy loading）：provider 客户端按平台惰性实例化并缓存复用，
+# 避免每次 chat() 重复握手 / 重复构造 httpx 连接池；同时在 STOCKAI_MOCK=1
+# 下短路网络调用，使离线测试快且确定性（对齐项目全量回归约定）。
+# ---------------------------------------------------------------------------
+def _mock_mode() -> bool:
+    return os.environ.get("STOCKAI_MOCK", "0") == "1"
+
+
+# 离线模拟短路判定：真实 openai 模块对象带有 __spec__（模块规格），
+# 测试打桩的 SimpleNamespace 等假对象没有。据此区分"真实模块/未安装"与
+# "测试打桩中"，避免在打桩期间误短路（如 test_model_router2）。
+def _mock_shortcircuit() -> bool:
+    """离线模拟短路：仅当 STOCKAI_MOCK=1 且 openai 非测试打桩时生效。"""
+    if not _mock_mode():
+        return False
+    mod = sys.modules.get("openai")
+    # None = openai 未安装且未打桩 → 离线场景，允许短路
+    # 打桩对象（无 __spec__）→ 不短路，让假客户端走完整路由/降级逻辑
+    return mod is None or getattr(mod, "__spec__", None) is not None
+
+
+_MOCK_REPLY = "[MOCK] 离线模拟回复"
+
+_CLIENTS: dict = {}  # (platform, base_url) -> OpenAI 客户端（惰性单例）
+
+
+def _get_client(platform: str, cfg: dict, timeout: int):
+    """惰性获取并缓存 OpenAI 兼容客户端（按平台+端点去重）。"""
+    key = (platform, cfg["base_url"])
+    client = _CLIENTS.get(key)
+    if client is None:
+        try:
+            from openai import OpenAI
+        except ImportError:  # noqa: BLE001
+            log.warning("openai 未安装，无法进行模型调用")
+            raise
+        api_key = (os.environ.get(cfg["key_env"], "") if cfg["key_env"]
+                   else "ollama")
+        client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
+                        timeout=timeout)
+        _CLIENTS[key] = client
+    return client
+
+
+def _client_cache_clear() -> int:
+    """清空客户端缓存（测试用）。返回被清除的数量。"""
+    n = len(_CLIENTS)
+    _CLIENTS.clear()
+    return n
 
 
 # ---- 任务类型路由（2026-10 升级）----
@@ -225,30 +278,28 @@ def engine_status() -> dict:
 
 def chat(prompt: str, system: str = "", platform: str = "auto",
          timeout: int = 30, max_tokens: int = 1024) -> str | None:
-    """统一调用。platform=auto时自动选第一个可用的。"""
-    try:
-        from openai import OpenAI
-    except ImportError:
-        log.warning("openai未安装")
-        return None
+    """统一调用。platform=auto时自动选第一个可用的。
 
+    延迟加载：OpenAI 客户端按平台惰性实例化并缓存复用；
+    STOCKAI_MOCK=1 时短路网络，返回确定性离线模拟回复。
+    """
     # 确定平台顺序
     if platform == "auto":
         order = available_platforms()
     else:
         order = [platform]
+    # 离线模拟：不触网，秒级返回，供 CI/回归使用（openai 被测试打桩时不短路）
+    if _mock_shortcircuit():
+        name = order[0] if order else (platform or "auto")
+        log.info("model_router[mock]: %s（短路网络）", name)
+        return f"{_MOCK_REPLY}::{name}::{prompt[:24]}"
 
     for name in order:
         cfg = PLATFORMS.get(name)
         if not cfg:
             continue
-        key = os.environ.get(cfg["key_env"], "") if cfg["key_env"] else "ollama"
         try:
-            client = OpenAI(
-                api_key=key,
-                base_url=cfg["base_url"],
-                timeout=timeout,
-            )
+            client = _get_client(name, cfg, timeout)
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
@@ -258,6 +309,7 @@ def chat(prompt: str, system: str = "", platform: str = "auto",
                 messages=messages,
                 temperature=0.4,
                 max_tokens=max_tokens,
+                timeout=timeout,
             )
             content = resp.choices[0].message.content or ""
             log.info("model_router: %s 调用成功", name)
@@ -334,13 +386,17 @@ def chat_vision(prompt: str, image_path: str, platform: str = "auto",
         return None
 
     order = available_vision_platforms() if platform == "auto" else [platform]
+    # 离线模拟：读取图片但不触网（openai 被测试打桩时不短路）
+    if _mock_shortcircuit():
+        name = order[0] if order else (platform or "auto")
+        log.info("model_router[mock]: vision %s（短路网络）", name)
+        return f"{_MOCK_REPLY}::vision::{name}::{prompt[:16]}"
     for name in order:
         cfg = VISION_PLATFORMS.get(name)
         if not cfg:
             continue
-        key = os.environ.get(cfg["key_env"], "") if cfg["key_env"] else "ollama"
         try:
-            client = OpenAI(api_key=key, base_url=cfg["base_url"], timeout=timeout)
+            client = _get_client(name, cfg, timeout)
             resp = client.chat.completions.create(
                 model=cfg["model"],
                 messages=[{
@@ -353,6 +409,7 @@ def chat_vision(prompt: str, image_path: str, platform: str = "auto",
                 }],
                 temperature=0.2,
                 max_tokens=2048,
+                timeout=timeout,
             )
             content = resp.choices[0].message.content or ""
             log.info("model_router: %s 视觉调用成功", name)

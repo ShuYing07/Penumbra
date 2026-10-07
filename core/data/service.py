@@ -172,7 +172,8 @@ def get_daily(ticker: str, use_cache: bool = True) -> tuple[pd.DataFrame, str]:
                 new_df = yf_src.fetch_daily_global(INDEX_MAP[ticker]["yfinance"])
         elif market == "CN":
             new_df = ak_src.fetch_daily_cn(ticker)
-        elif market in ("US", "HK", "GLOBAL", "CRYPTO"):
+        elif market in ("US", "HK", "GLOBAL", "CRYPTO", "JP", "KR", "TW"):
+            # 日股/韩股/台股/港股/美股均走 yfinance 全球源（免费、覆盖最广）
             new_df = yf_src.fetch_daily_global(ticker)
         else:
             raise ValueError(f"无法识别标的: {ticker}")

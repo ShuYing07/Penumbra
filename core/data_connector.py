@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import io
 import logging
 import sqlite3
 from pathlib import Path
@@ -46,6 +47,70 @@ def parse_csv(path: str | Path) -> pd.DataFrame:
 def parse_excel(path: str | Path, sheet: str | int = 0) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet)
     return _normalize(df)
+
+
+def parse_clipboard_table(text: str) -> pd.DataFrame:
+    """解析剪贴板表格文本为标准化 OHLCV。
+
+    自动检测分隔符：制表符（Excel 复制）→ TSV；否则逗号（CSV）；否则连续空白。
+    自动判断首行是否为表头（中英表头识别；否则按位置赋列 date/open/high/low/close/volume）。
+    空内容 / 无有效数据行 → 抛 ValueError。
+    """
+    if text is None or not str(text).strip():
+        raise ValueError("剪贴板内容为空")
+    lines = [ln for ln in str(text).strip().splitlines() if ln.strip()]
+    if not lines:
+        raise ValueError("剪贴板无有效数据行")
+    sample = lines[0]
+    if "\t" in sample:
+        sep = "\t"
+    elif "," in sample and sample.count(",") >= sample.count(" "):
+        sep = ","
+    else:
+        sep = r"\s+"
+
+    _HEADER_NAMES = set(_REQUIRED_COLS) | set(_ALIASES) | {"date", "open"}
+
+    try:
+        df = pd.read_csv(io.StringIO(str(text).strip()), sep=sep,
+                         engine="python", header=None)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"剪贴板解析失败：{type(e).__name__}: {e}")
+    if df.empty:
+        raise ValueError("剪贴板解析后无数据")
+
+    # 首行若为表头（含日期/OHLCV 中英列名）→ 作为列名并下移
+    first_cells = [str(c).strip().lower() for c in df.iloc[0].tolist()]
+    has_header = bool(set(first_cells) & _HEADER_NAMES)
+    if has_header:
+        df.columns = [str(c).strip() for c in df.iloc[0].tolist()]
+        df = df.iloc[1:].reset_index(drop=True)
+    else:
+        # 无表头：按位置赋列
+        ncol = df.shape[1]
+        if ncol < 5:
+            raise ValueError(f"列数不足：期望≥5（date,open,high,low,close），实际 {ncol}")
+        pos = ["date", "open", "high", "low", "close", "volume"]
+        df.columns = pos[:ncol]
+
+    return _normalize(df)
+
+
+def parse_image_ohlcv(image_path: str, extractor=None) -> pd.DataFrame:
+    """从行情/表格截图导入 OHLCV。
+
+    extractor(image_path) -> str：视觉模型把图内表格转成 CSV 文本；
+    缺省走 core.multimodal_parser.extract_image_table（视觉 LLM 优先，离线返回空）。
+    提取出的 CSV 再交给 parse_clipboard_table 标准化为 OHLCV。
+    """
+    if extractor is None:
+        from core.multimodal_parser import extract_image_table
+        extractor = extract_image_table
+    csv_text = extractor(image_path)
+    if not csv_text or not csv_text.strip():
+        raise ValueError("图片未解析出表格数据（需含 OHLCV 表格的截图；"
+                         "或改用 CSV / 剪贴板导入）")
+    return parse_clipboard_table(csv_text)
 
 
 def import_to_cache(df: pd.DataFrame, ticker: str) -> int:

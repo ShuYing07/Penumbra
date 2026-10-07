@@ -8,7 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.config import BEIJING_TZ, is_market_open
+from core.config import BEIJING_TZ, is_market_open, MARKET_META, market_meta
 from core.data.service import is_cn_etf, market_of, security_type
 from core.quant.backtest import (BacktestConfig, _lot_shares, default_fee,
                                   run_backtest)
@@ -81,6 +81,91 @@ def test_default_fee_cn_etf_exempt():
 def test_default_fee_others_unchanged():
     assert default_fee("US").stamp_tax_sell == 0.0
     assert default_fee("CRYPTO").commission_rate == 0.001
+
+
+# ---------- 日股/韩股/台股 市场注册表（任务书B·模块二）----------
+def test_market_meta_jp_kr_tw():
+    for m in ("JP", "KR", "TW"):
+        assert m in MARKET_META, m
+        meta = MARKET_META[m]
+        assert meta["currency"] in ("JPY", "KRW", "TWD")
+        assert meta["code_fmt"]
+        assert isinstance(meta["sessions_bj"], list) and meta["sessions_bj"]
+    # 市场元信息取用兜底
+    assert market_meta("UNKNOWN") is MARKET_META["GLOBAL"]
+
+
+def test_is_market_open_jp():
+    # 东京 09:00-11:30 / 12:30-15:00 JST = 北京 08:00-10:30 / 11:30-14:00
+    # 2026-09-14 为周一
+    assert is_market_open("JP", _t(2026, 9, 14, 9, 0)) is True    # 上午盘
+    assert is_market_open("JP", _t(2026, 9, 14, 11, 0)) is False  # 中午休市
+    assert is_market_open("JP", _t(2026, 9, 14, 13, 0)) is True   # 下午盘
+    assert is_market_open("JP", _t(2026, 9, 14, 14, 0)) is False  # 收盘边界
+    assert is_market_open("JP", _t(2026, 9, 12, 9, 0)) is False   # 周六
+
+
+def test_is_market_open_kr():
+    # 首尔 09:00-15:30 KST = 北京 08:00-14:30（连续，无午休）
+    assert is_market_open("KR", _t(2026, 9, 14, 8, 0)) is True
+    assert is_market_open("KR", _t(2026, 9, 14, 11, 0)) is True    # 无午休
+    assert is_market_open("KR", _t(2026, 9, 14, 14, 29)) is True
+    assert is_market_open("KR", _t(2026, 9, 14, 14, 30)) is False  # 收盘边界
+    assert is_market_open("KR", _t(2026, 9, 12, 9, 0)) is False    # 周六
+
+
+def test_is_market_open_tw():
+    # 台北 09:00-13:30 = 北京 09:00-13:30（UTC+8 同）
+    assert is_market_open("TW", _t(2026, 9, 14, 9, 0)) is True
+    assert is_market_open("TW", _t(2026, 9, 14, 12, 0)) is True
+    assert is_market_open("TW", _t(2026, 9, 14, 13, 30)) is False
+    assert is_market_open("TW", _t(2026, 9, 12, 9, 0)) is False
+
+
+def test_default_fee_jp_kr_tw():
+    jp = default_fee("JP")
+    assert jp.commission_rate == 0.0003 and jp.stamp_tax_sell == 0.0
+    kr = default_fee("KR")
+    assert kr.commission_rate == 0.0003 and kr.stamp_tax_sell == 0.0
+    tw = default_fee("TW")
+    assert tw.commission_rate == 0.0001425
+    assert abs(tw.stamp_tax_sell - 0.003) < 1e-9
+    # 不破坏既有市场
+    assert default_fee("CN", "SH600519").stamp_tax_sell == 0.0005
+
+
+def test_get_daily_routes_global_to_yfinance():
+    """日股/韩股/台股必须路由到 yfinance 全球源（而非抛 ValueError）。"""
+    import pandas as pd
+    from core.data import service as svc
+
+    idx = pd.date_range("2026-01-01", periods=30, freq="B")
+    dummy = pd.DataFrame({"close": range(30)}, index=idx)
+
+    captured = {}
+
+    def fake_fetch(ticker, period="2y"):
+        captured["ticker"] = ticker
+        return dummy
+
+    # 手动保存/恢复，兼容 plain run 与 pytest
+    saved_fetch = svc.yf_src.fetch_daily_global
+    saved_load = svc.cache.load_bars
+    saved_up = svc.cache.upsert_bars
+    svc.yf_src.fetch_daily_global = fake_fetch
+    svc.cache.load_bars = lambda t: dummy            # 不走早期缓存返回，最终回读 = dummy
+    svc.cache.upsert_bars = lambda *a, **k: 0
+    try:
+        for tk in ("7203.T", "005930.KS", "2330.TW"):
+            df, status = svc.get_daily(tk, use_cache=False)
+            assert captured["ticker"] == tk, (tk, captured)
+            assert len(df) == 30, (tk, len(df))
+            assert "network" in status
+    finally:
+        svc.yf_src.fetch_daily_global = saved_fetch
+        svc.cache.load_bars = saved_load
+        svc.cache.upsert_bars = saved_up
+
 
 
 # ---------- 整手 ----------

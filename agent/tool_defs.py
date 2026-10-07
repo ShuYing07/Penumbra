@@ -11,8 +11,8 @@ import logging
 from functools import lru_cache
 from typing import Any, Callable, Dict, List
 
-from agent.schemas import (BacktestIn, DrawingsIn, FetchStockIn, IndicatorsIn,
-                           MarketOverviewIn, NewsIn, RealtimeIn,
+from agent.schemas import (BacktestIn, ChartControlIn, DrawingsIn, FetchStockIn,
+                           IndicatorsIn, MarketOverviewIn, NewsIn, RealtimeIn,
                            ScreenerIn, SearchStocksIn, ToolResult,
                            fail_result, ok_result)
 from core.data import service
@@ -304,6 +304,12 @@ def build_registry() -> Dict[str, Dict[str, Any]]:
             "schema": ScreenerIn,
             "description": "按结构化条件筛选股票（市场/板块/价格区间/涨跌幅区间）。输入：可选条件。",
         },
+        "chart_control": {
+            "func": chart_control_tool,
+            "schema": ChartControlIn,
+            "description": "图表 AI 控制面（MCP 兼容）：add_indicator/add_drawing/set_timeframe 等，"
+                          "可编程增删指标与绘图、切换周期。仅做图表展示，不荐股、不给目标价。",
+        },
     }
 
 
@@ -320,6 +326,40 @@ def _run_screener_lazy(code: str = "", market: str | None = None,
         return ok_result("run_screener", data, data.get("note", ""))
     except Exception as e:  # noqa: BLE001
         return fail_result("run_screener", f"筛选引擎未就绪：{e}")
+
+
+# ---------------------------------------------------------------------------
+# 图表 AI 控制面（MCP 兼容）：Agent 可程序化增删指标/绘图、切周期
+# ---------------------------------------------------------------------------
+_chart_states: Dict[str, Any] = {}   # ticker → ChartState（进程内会话态）
+
+
+def chart_control_tool(ticker: str = "", action: str = "", id: str | None = None,
+                       tool: str | None = None, tf: str | None = None,
+                       params: dict | None = None, points: list | None = None,
+                       meta: dict | None = None) -> ToolResult:
+    """MCP 兼容的图表控制指令入口。返回 {ok, state, note}。
+
+    仅控制图表展示，不产出任何荐股/目标价（合规红线）。
+    """
+    try:
+        from core.chart_engine import ChartState, apply_chart_command
+    except Exception as e:  # noqa: BLE001
+        return fail_result("chart_control", f"图表引擎不可用：{e}")
+    key = ticker or "_current"
+    st = _chart_states.get(key)
+    if st is None:
+        st = ChartState(ticker=ticker or "")
+        _chart_states[key] = st
+    cmd = {"action": action, "id": id, "tool": tool, "tf": tf,
+           "params": params or {}, "points": points or [], "meta": meta or {}}
+    if ticker:
+        cmd.setdefault("ticker", ticker)
+    try:
+        res = apply_chart_command(st, cmd)
+    except Exception as e:  # noqa: BLE001
+        return fail_result("chart_control", f"{type(e).__name__}: {e}")
+    return ok_result("chart_control", res, res.get("note", ""))
 
 
 def call_tool(name: str, kwargs: dict) -> ToolResult:
