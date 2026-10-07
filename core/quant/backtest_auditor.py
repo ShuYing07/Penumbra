@@ -219,6 +219,11 @@ def audit_strategy(df: pd.DataFrame, market: str = "CN",
     """对策略执行 8 条分级审计。返回结构化报告。"""
     params = dict(params or {})
     checks: List[dict] = []
+
+    # 前置门禁：回测**执行前**的源码静态审计（AST）。
+    # 独立于 8 条运行时规则之外（放在报告第一部分展示），避免污染既有评级口径。
+    static_scan = _static_scan(strategy)
+
     checks.append({"rule": "lookahead", "name": "前视偏差",
                    **_check_lookahead(df, strategy, params)})
     checks.append({"rule": "time_alignment", "name": "时间对齐",
@@ -241,9 +246,34 @@ def audit_strategy(df: pd.DataFrame, market: str = "CN",
     score = max(0, min(100, 100 - critical * 25 - high * 10))
     grade = ("D" if critical else "C" if high else "B") if (critical or high) else "A"
     passed = critical == 0 and high == 0
+    summary = f"审计 {grade} 级 · {score}/100 · 致命 {critical} / 高危 {high}"
+    # 静态审计命中致命项：整体判定为不通过，并在摘要里点名（报告第一部分）
+    if static_scan.get("blocking"):
+        passed = False
+        fatal_n = static_scan.get("counts", {}).get("FATAL", 0)
+        summary = (f"⛔ 源码静态审计发现 {fatal_n} 项致命前视偏差（建议修复后再回测） · "
+                   + summary)
     return {"grade": grade, "score": score, "passed": passed,
             "checks": checks,
-            "summary": f"审计 {grade} 级 · {score}/100 · 致命 {critical} / 高危 {high}"}
+            "static_scan": static_scan,
+            "summary": summary}
+
+
+def _static_scan(strategy: str) -> dict:
+    """对内置策略函数做 AST 静态审计（取不到源码时静默降级为空报告）。"""
+    try:
+        from core.quant.ast_bias_scan import scan_function
+        from core.quant.backtest import STRATEGIES
+        fn = STRATEGIES.get(strategy)
+        if fn is None:
+            return {"target": strategy, "passed": True, "blocking": False,
+                    "counts": {}, "findings": [],
+                    "error": "未找到该策略的信号函数（自定义策略）"}
+        rep = scan_function(fn)
+        return rep.to_dict()
+    except Exception as e:  # noqa: BLE001
+        return {"target": strategy, "passed": True, "blocking": False,
+                "counts": {}, "findings": [], "error": f"静态审计不可用：{e}"}
 
 
 def honest_vs_biased(df: pd.DataFrame, market: str = "CN",

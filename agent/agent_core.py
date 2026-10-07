@@ -23,6 +23,7 @@ from typing import Any, Dict, List
 from agent.schemas import ToolResult
 from agent.tool_defs import build_registry, call_tool
 from compliance.rule_engine import RuleEngine
+from tools import get_registry
 
 log = logging.getLogger("stockai.agent.core")
 
@@ -78,7 +79,9 @@ class AgentCore:
 
     def __init__(self, llm=None, mock: bool | None = None):
         self._lock = threading.Lock()
-        self.tools = build_registry()
+        self.tools = build_registry()          # 旧字典式注册表（兼容 _llm_plan 等）
+        # 模块一：统一工具注册表（带 Schema / 风险分级 / 治理钩子 / 耗时留痕）
+        self.registry = get_registry()
         self.llm = llm
         self.rules = RuleEngine()
         if mock is None:
@@ -98,6 +101,14 @@ class AgentCore:
     def set_event_callback(self, cb) -> None:
         """注册事件回调（如 PyQt 信号桥），实时推送 THINKING/TOOL_CALL/…。"""
         self.events.set_callback(cb)
+
+    def add_tool_gate(self, hook) -> None:
+        """挂载工具调用治理钩子（SAFR 检查点）：返回非空字符串即拦截该次调用。
+
+        hook(name, kwargs) -> Optional[str]
+        用于实现：授权范围、暴露限额、频控、证据质量门槛。
+        """
+        self.registry.add_pre_hook(hook)
 
     # ---------------- 意图解析 ----------------
     def plan(self, text: str) -> List[Dict[str, Any]]:
@@ -210,14 +221,23 @@ class AgentCore:
             self.events.emit(EventType.TOOL_CALL,
                              f"调用 {step['tool']}",
                              tool=step["tool"], kwargs=step.get("kwargs") or {})
-            res = call_tool(step["tool"], dict(step.get("kwargs") or {}))
+            # 走统一注册表：参数校验 + 治理钩子 + 耗时/来源留痕；
+            # 注册表不含的极旧工具名自动回退旧实现，保证计划不中断。
+            kwargs = dict(step.get("kwargs") or {})
+            if self.registry.get(step["tool"]) is None:
+                res = call_tool(step["tool"], kwargs)
+            else:
+                res = self.registry.call(step["tool"], kwargs)
             d = res.model_dump()
             ok = d.get("ok")
             note = d.get("note", "")
-            self.events.emit(EventType.TOOL_RESULT,
-                             f"{step['tool']} → {'成功' if ok else '失败'} "
-                             + (f"（{note[:80]}）" if note else ""),
-                             ok=ok, tool=step["tool"])
+            self.events.emit(
+                EventType.TOOL_RESULT,
+                f"{step['tool']} → {'成功' if ok else '失败'} "
+                + (f"（{note[:80]}）" if note else "")
+                + (f" · {d['meta']['latency_ms']}ms"
+                   if isinstance(d.get("meta"), dict) and "latency_ms" in d["meta"] else ""),
+                ok=ok, tool=step["tool"])
             results.append({"tool": step["tool"], "result": d})
         self.events.emit(EventType.REASONING, "基于工具结果组织最终回复")
         answer = self._compose(user_input, plan, results, context)
