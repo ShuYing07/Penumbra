@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 
 from core.eval.eval_benchmark import evaluate_analysis
 from core.config import DATA_DIR
+from core import db_util
 
 log = logging.getLogger("stockai.core.eval.suite")
 
@@ -53,7 +54,7 @@ STANDARD_CASES: List[Dict[str, Any]] = [
 
 def _conn() -> sqlite3.Connection:
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB))
+    conn = db_util.connect(str(_DB), retries=3)
     conn.executescript(_SCHEMA)
     return conn
 

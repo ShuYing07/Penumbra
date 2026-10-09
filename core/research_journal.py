@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.config import DATA_DIR, now_cn
+from core import db_util
 
 _DB = Path(DATA_DIR) / "research_journal.db"
 
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS research_journal(
 
 def _conn():
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB))
+    conn = db_util.connect(str(_DB), retries=3)
     conn.row_factory = sqlite3.Row
     return conn
 

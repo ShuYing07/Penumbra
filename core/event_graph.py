@@ -378,6 +378,247 @@ def query_anchored(entity: str, since: str | None = None,
              "source": r[5], "text": r[6]} for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# 第20轮增强：因果链强度 × 时效衰减 × PIT 过滤 × 力导向图数据
+# ---------------------------------------------------------------------------
+_MAX_PATHS = 200          # 路径枚举上限，防组合爆炸
+
+
+def _weighted_edges() -> List[Tuple[str, str, str, float]]:
+    """读取带权边（weight 缺省 1.0）。"""
+    with _db() as c:
+        rows = c.execute("SELECT src,dst,rel,weight FROM eg_edges").fetchall()
+    return [(r[0], r[1], r[2], float(r[3] or 1.0)) for r in rows]
+
+
+def _anchor_dates() -> Dict[str, str]:
+    """实体 → 最近锚定日期（YYYYMMDD），用于时效衰减。"""
+    out: Dict[str, str] = {}
+    try:
+        with _db_ext() as c:
+            rows = c.execute(
+                "SELECT entity, MAX(adate) FROM eg_anchor WHERE adate<>'' "
+                "GROUP BY entity").fetchall()
+        out = {r[0]: r[1] for r in rows if r[1]}
+    except Exception as e:  # noqa: BLE001  锚定表不可用时退化为无衰减
+        log.debug("锚定日期不可用：%s", e)
+    return out
+
+
+def _event_first_dates(entity: Optional[str] = None) -> Dict[str, str]:
+    """事件类型 → 该类型**最早**锚定日期（YYYYMMDD），用于 PIT 过滤。
+
+    取最早而非最晚：某事件类型只要在 as_of 之后才第一次出现，
+    就说明该时点市场还不知道它，不得进因果链。
+    指定 entity 时只统计该标的的锚定（避免跨标的污染，保证判定可复现）。
+    """
+    out: Dict[str, str] = {}
+    try:
+        sql = "SELECT etype, MIN(adate) FROM eg_anchor WHERE adate<>''"
+        args: List[Any] = []
+        if entity:
+            sql += " AND entity=?"
+            args.append(entity)
+        sql += " GROUP BY etype"
+        with _db_ext() as c:
+            rows = c.execute(sql, args).fetchall()
+        out = {r[0]: r[1] for r in rows if r[0] and r[1]}
+    except Exception as e:  # noqa: BLE001
+        log.debug("事件首现日期不可用：%s", e)
+    return out
+
+
+def _future_event_types(as_of_n: str,
+                        entity: Optional[str] = None) -> set:
+    """as_of 之后才首次出现的事件类型集合（PIT 未来信息）。"""
+    if not as_of_n:
+        return set()
+    return {t for t, d in _event_first_dates(entity).items() if d > as_of_n}
+
+
+def _decay(age_days: float, half_life_days: int) -> float:
+    """指数衰减：半衰期 half_life_days。"""
+    import math
+    hl = max(1.0, float(half_life_days))
+    return float(math.pow(0.5, max(0.0, age_days) / hl))
+
+
+def _age_days(adate: str, as_of: str) -> float:
+    """锚定日距 as_of 的天数（格式 YYYYMMDD；解析失败返回 0=最新）。"""
+    from datetime import date
+    try:
+        a = date(int(as_of[:4]), int(as_of[4:6]), int(as_of[6:8]))
+        b = date(int(adate[:4]), int(adate[4:6]), int(adate[6:8]))
+        return float(max(0, (a - b).days))
+    except (ValueError, TypeError, IndexError):
+        return 0.0
+
+
+def query_causal_chains(entity: Optional[str] = None,
+                        event_type: Optional[str] = None,
+                        depth: int = 3,
+                        as_of: Optional[str] = None,
+                        half_life_days: int = 30,
+                        top_k: int = 5) -> Dict[str, Any]:
+    """带**强度**与**时效衰减**的因果传导链查询（第20轮）。
+
+    与 ``query_event_chain`` 的区别：
+    - 后者只做 BFS 可达性（能不能到）；
+    - 本函数枚举**完整路径**并给出每条路径的因果强度
+      （边权连乘 × 时间衰减），可排序、可解释、可供 UI 力导向图渲染。
+
+    Args:
+        entity: 起点实体；缺省时取 event_type 对应的事件节点。
+        event_type: 事件类型名（如「业绩预增」），可多个起点。
+        depth: 最大路径跳数。
+        as_of: PIT 截止日（YYYY-MM-DD / YYYYMMDD）；给出则
+            **剔除该日之后才锚定的事件**，防止未来事件混进因果链。
+        half_life_days: 时间衰减半衰期。
+        top_k: 返回最强的 k 条链。
+
+    Returns:
+        {chains, node_count, edge_count, as_of, summary}
+    """
+    with _db() as c:
+        nodes = c.execute("SELECT id,layer,kind,label FROM eg_nodes").fetchall()
+    edges = _weighted_edges()
+    if not nodes or not edges:
+        return {"chains": [], "node_count": len(nodes), "edge_count": len(edges),
+                "as_of": as_of or "", "summary": "图谱为空或无边"}
+
+    label_of = {n[0]: (n[1], n[2], n[3]) for n in nodes}   # id -> (layer,kind,label)
+    as_of_n = _norm_date(as_of or "") if as_of else ""
+    # PIT：该标的（未指定时用全局）在 as_of 之后才首现的事件类型
+    future_types = _future_event_types(as_of_n, entity)
+    anchors = _anchor_dates() if as_of_n else {}
+
+    def _is_future(nid: str) -> bool:
+        """该节点是否为 as_of 之后才存在的信息。"""
+        layer, _kind, lbl = label_of.get(nid, ("", "", nid))
+        if layer == "event" and lbl in future_types:
+            return True
+        d = _norm_date(anchors.get(nid, "")) if as_of_n else ""
+        return bool(d and d > as_of_n)
+
+    # 起点集合
+    starts: List[str] = []
+    if entity:
+        starts = [entity] if entity in label_of else []
+    if not starts and event_type:
+        starts = [n[0] for n in nodes if n[3] == event_type and not _is_future(n[0])]
+    if not starts:
+        starts = [nodes[0][0]]
+
+    adj: Dict[str, List[Tuple[str, str, float]]] = {}
+    for s, d, r, w in edges:
+        adj.setdefault(s, []).append((d, r, w))
+        adj.setdefault(d, []).append((s, r, w))
+
+    chains: List[Dict[str, Any]] = []
+    for start in starts:
+        stack: List[Tuple[str, List[str], List[str], float]] = [
+            (start, [start], [], 1.0)]
+        while stack and len(chains) < _MAX_PATHS:
+            cur, path, rels, strength = stack.pop()
+            if len(rels) >= 1:            # 至少一条边才成"链"
+                chain_ents = [label_of.get(p, ("", "", p))[2] for p in path]
+                age = 0.0
+                if as_of_n:
+                    dates = [_norm_date(anchors.get(p, "")) for p in path]
+                    dates = [d for d in dates if d]
+                    age = max((_age_days(d, as_of_n) for d in dates), default=0.0)
+                decayed = strength * _decay(age, half_life_days)
+                chains.append({
+                    "nodes": list(path), "labels": chain_ents, "rels": list(rels),
+                    "strength": round(strength, 4),
+                    "decayed": round(decayed, 4),
+                    "age_days": round(age, 1),
+                    "steps": len(rels),
+                    "path": " → ".join(
+                        f"{chain_ents[i]}[{rels[i]}]" for i in range(len(rels)))
+                        + f" → {chain_ents[-1]}",
+                })
+            if len(rels) >= depth:
+                continue
+            for nxt, rel, w in adj.get(cur, []):
+                if nxt in path:           # 简单路径，防环
+                    continue
+                if _is_future(nxt):
+                    continue              # PIT：未来事件不得入链
+                stack.append((nxt, path + [nxt], rels + [rel], strength * w))
+
+    chains.sort(key=lambda c: (-c["decayed"], c["steps"]))
+    top = chains[:max(1, int(top_k))]
+    summary = (f"因果链 {len(chains)} 条（截取 {len(top)}）· 最强 "
+               f"{top[0]['decayed']:.3f} · {top[0]['path']}" if top else "未找到传导链")
+    return {"chains": top, "chain_count": len(chains),
+            "node_count": len(nodes), "edge_count": len(edges),
+            "as_of": as_of or "", "half_life_days": half_life_days,
+            "summary": summary}
+
+
+def graph_for_ui(entity: Optional[str] = None,
+                 as_of: Optional[str] = None,
+                 limit: int = 200) -> Dict[str, Any]:
+    """力导向图数据接口：{nodes:[{id,label,layer,kind,size}], links:[...]}。
+
+    未指定 entity 时导出全图（按 limit 截断）；指定时只导出该实体的
+    一阶邻域（更适合前端渲染）。as_of 给出时做 PIT 过滤。
+    """
+    with _db() as c:
+        nodes = c.execute("SELECT id,layer,kind,label FROM eg_nodes").fetchall()
+    edges = _weighted_edges()
+    as_of_n = _norm_date(as_of or "") if as_of else ""
+    anchors = _anchor_dates() if as_of_n else {}
+    future_types = _future_event_types(as_of_n, entity) if as_of_n else set()
+    label_of = {n[0]: (n[1], n[2], n[3]) for n in nodes}
+
+    keep = {n[0] for n in nodes}
+    if entity:
+        nb = {entity}
+        for s, d, _r, _w in edges:
+            if s == entity:
+                nb.add(d)
+            elif d == entity:
+                nb.add(s)
+        keep = nb & keep
+    if as_of_n:
+        keep = {n for n in keep
+                if not (label_of.get(n, ("", "", ""))[2] in future_types)
+                and not (_norm_date(anchors.get(n, ""))
+                         and _norm_date(anchors.get(n, "")) > as_of_n)}
+
+    keep_list = sorted(keep)[:max(1, int(limit))]
+    keep = set(keep_list)
+    deg: Dict[str, int] = {}
+    for s, d, _r, _w in edges:
+        if s in keep:
+            deg[s] = deg.get(s, 0) + 1
+        if d in keep:
+            deg[d] = deg.get(d, 0) + 1
+    out_nodes = [{"id": i,
+                  "label": label_of.get(i, ("", "", i))[2],
+                  "layer": label_of.get(i, ("", "", i))[0],
+                  "kind": label_of.get(i, ("", "", i))[1],
+                  "size": 6 + min(24, 3 * deg.get(i, 0))} for i in keep_list]
+    out_links = [{"source": s, "target": d, "rel": r, "weight": round(w, 3)}
+                 for s, d, r, w in edges if s in keep and d in keep]
+    return {"nodes": out_nodes, "links": out_links,
+            "layers": sorted({n["layer"] for n in out_nodes}),
+            "node_count": len(out_nodes), "link_count": len(out_links)}
+
+
+def format_chains(rep: Dict[str, Any]) -> str:
+    """人读：按强度排序的因果链清单。"""
+    lines = [rep.get("summary", "")]
+    for i, c in enumerate(rep.get("chains", []), 1):
+        lines.append(f"\n{i}. 强度 {c['decayed']:.3f}"
+                     + (f"（原始 {c['strength']:.3f} × 时效衰减 {c['age_days']:.0f}天）"
+                        if c["age_days"] else "")
+                     + f"\n   {c['path']}")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     # 自检
     texts = ["贵州茅台业绩预增，净利润同比增长15%",
@@ -395,5 +636,14 @@ if __name__ == "__main__":
     # 事件类型过滤
     c2 = query_event_chain(event_type="业绩预增", depth=2)
     assert c2["nodes"]
+    # 第20轮：因果链强度 / PIT / 力导向图
+    cc = query_causal_chains(entity="600519", depth=3, top_k=3)
+    assert cc["chain_count"] > 0, cc
+    assert cc["chains"][0]["strength"] > 0
+    g = graph_for_ui(entity="600519")
+    assert g["node_count"] >= 1 and g["link_count"] >= 0
+    assert all("layer" in n for n in g["nodes"])
+    assert format_chains(cc)
     print(f"event_graph self-check ok (nodes={b['nodes']}, "
-          f"path={chain['path'][:4]}, risk={imp['summary']})")
+          f"path={chain['path'][:4]}, risk={imp['summary']}, "
+          f"chains={cc['chain_count']}, ui_nodes={g['node_count']})")

@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from core.config import DATA_DIR
+from core import db_util
 
 log = logging.getLogger("stockai.research_skills")
 
@@ -61,7 +62,7 @@ CREATE INDEX IF NOT EXISTS ix_trace_skill ON research_skill_traces(skill, ts);
 
 def _trace_conn() -> sqlite3.Connection:
     _TRACE_DB.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(_TRACE_DB, timeout=10)
+    con = db_util.connect(_TRACE_DB, timeout=10, retries=3)
     con.executescript(_TRACE_SCHEMA)
     return con
 

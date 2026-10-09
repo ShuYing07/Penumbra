@@ -1,0 +1,18 @@
+=== 疏影·知微 桌面快捷方式创建指南 ===
+
+1. 打开文件资源管理器，导航到: D:/StockAIPredictor/dist/疏影知微/
+2. 右键点击 '疏影知微.exe'
+3. 选择 '发送到' -> '桌面快捷方式'
+4. 或者手动复制该exe文件到桌面，右键选择'创建快捷方式'
+
+目标路径: D:/StockAIPredictor/dist/疏影知微/疏影知微.exe
+起始位置: D:/StockAIPredictor/dist/疏影知微
+
+=== 验证程序是否正常运行 ===
+1. 双击桌面上的'疏影知微'快捷方式
+2. 程序应该启动并显示主界面
+3. 如果出现错误，请检查以下内容：
+   - 确保有足够的内存和磁盘空间
+   - Windows Defender 没有阻止程序运行
+   - .NET Framework 4.8 已安装
+   - Visual C++ Redistributable 2019 已安装

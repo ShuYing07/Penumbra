@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.config import DATA_DIR
+from core import db_util
 from core.distilled_knowledge import DOMAINS, KNOWLEDGE
 
 _KB_DB = DATA_DIR / "distilled_kb.db"
@@ -79,7 +80,7 @@ class KnowledgeDistiller:
         self._seeded = False
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self._db, timeout=10)
+        con = db_util.connect(self._db, timeout=10, retries=3)
         con.row_factory = sqlite3.Row
         return con
 

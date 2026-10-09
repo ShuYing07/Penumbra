@@ -32,10 +32,11 @@ CREATE TABLE IF NOT EXISTS ledger (
 def _conn():
     import sqlite3
     from contextlib import closing, contextmanager
+    from core import db_util
 
     @contextmanager
     def _open():
-        con = sqlite3.connect(_DB)
+        con = db_util.connect(_DB, retries=3)
         con.row_factory = sqlite3.Row
         con.executescript(_SCHEMA)
         with closing(con):

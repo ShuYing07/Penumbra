@@ -22,6 +22,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from core import db_util
+
 log = logging.getLogger("stockai.core.human_review")
 
 _DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -100,7 +102,7 @@ class ReviewGate:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self._db)
+        c = db_util.connect(self._db, retries=3)
         c.execute("CREATE TABLE IF NOT EXISTS reviews "
                   "(review_id TEXT PRIMARY KEY, payload TEXT, updated_at REAL)")
         return c

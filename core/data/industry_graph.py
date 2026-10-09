@@ -20,6 +20,7 @@ from typing import Dict, List
 import requests
 
 from core.config import DATA_DIR, domestic_network
+from core import db_util
 
 log = logging.getLogger("stockai.data.industry")
 
@@ -67,7 +68,7 @@ def _get(fs: str, pz: int = 200) -> List[Dict[str, str]]:
 
 def _conn() -> sqlite3.Connection:
     os.makedirs(DATA_DIR, exist_ok=True)
-    c = sqlite3.connect(DB_PATH)
+    c = db_util.connect(DB_PATH, retries=3)
     c.execute(
         """CREATE TABLE IF NOT EXISTS concepts (
                concept_name TEXT, stock_code TEXT, stock_name TEXT, updated_at REAL)"""

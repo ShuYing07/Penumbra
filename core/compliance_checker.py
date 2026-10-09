@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
+
+from core import db_util
 
 DEFAULT_RULES = {
     "blacklist": [],                 # ["600xxx", "industry:军工", "type:ST"]
@@ -35,7 +38,7 @@ def _db() -> Path:
 def save_rules(rules: dict, tenant_id: str = "default") -> None:
     """保存租户级合规规则（JSON 序列化）。"""
     import json
-    with sqlite3.connect(_db()) as conn:
+    with closing(db_util.connect(_db(), retries=3)) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rules(
                 tenant_id TEXT PRIMARY KEY, rules TEXT NOT NULL,
@@ -48,7 +51,7 @@ def save_rules(rules: dict, tenant_id: str = "default") -> None:
 
 def load_rules(tenant_id: str = "default") -> dict:
     import json
-    with sqlite3.connect(_db()) as conn:
+    with closing(db_util.connect(_db(), retries=3)) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rules(
                 tenant_id TEXT PRIMARY KEY, rules TEXT NOT NULL,

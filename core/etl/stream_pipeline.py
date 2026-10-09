@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 import pandas as pd
 
 from core.config import DATA_DIR
+from core import db_util
 
 log = logging.getLogger("stockai.core.etl.stream_pipeline")
 
@@ -204,7 +205,7 @@ def try_pyflink_agg(rows: List[dict], window_s: int = 5) -> Optional[pd.DataFram
 # ---------------------------------------------------------------------------
 def _conn() -> sqlite3.Connection:
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(_DB))
+    c = db_util.connect(str(_DB), retries=3)
     c.executescript(_SCHEMA)
     return c
 

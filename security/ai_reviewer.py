@@ -33,6 +33,19 @@ _REVIEW_RULES = [
 
 _DISCLAIMER_OK = ("不构成投资建议", "仅供研究学习", "风险自负", "仅供参考")
 
+# 否定前缀：出现在命中词之前（窗口 12 字）时，视为「拒绝性引用」而非违规。
+# 例：『不提供目标价』『不建议买入』『并非无风险』——说的是"不做"，不是在荐股。
+_NEGATION_HINT = ("不提供", "不输出", "不给", "不出", "不建议", "不推荐", "不能",
+                  "不会", "不要", "无法", "没有", "拒绝", "禁止", "切勿",
+                  "避免", "并非", "不", "无", "非")
+_NEGATION_WINDOW = 12
+
+
+def _is_negated(text: str, start: int) -> bool:
+    """命中词前 _NEGATION_WINDOW 字内是否存在否定词（防「拒绝性引用」误判）。"""
+    left = text[max(0, start - _NEGATION_WINDOW):start]
+    return any(w in left for w in _NEGATION_HINT)
+
 
 def review_output(text: str, use_llm: bool = False,
                   timeout: int = 20) -> dict:
@@ -41,12 +54,15 @@ def review_output(text: str, use_llm: bool = False,
     - passed: 无 high 级命中且免责声明存在（或文本极短无需声明）；
     - issues: 命中的规则明细（含建议）；
     - score: 0~100（合规度，命中 high 扣 40/条、medium 扣 20、low 扣 8，最低 0）。
+
+    注：命中词若被否定词修饰（如「不提供目标价」「不建议买入」）判为
+    **拒绝性引用**，不计违规——否则"越守规矩越被扣分"。
     """
     t = str(text or "")
     issues: list[dict] = []
     for r in _REVIEW_RULES:
         m = re.search(r["regex"], t)
-        if m:
+        if m and not _is_negated(t, m.start()):
             issues.append({
                 "rule": r["id"], "severity": r["severity"], "label": r["label"],
                 "keyword": m.group(0),

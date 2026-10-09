@@ -15,6 +15,7 @@ from typing import Iterable
 import pandas as pd
 
 from core.config import DB_PATH, now_cn
+from core import db_util
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_bars(
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS token_ledger(
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = db_util.connect(DB_PATH, timeout=30, retries=3)
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")

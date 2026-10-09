@@ -19,6 +19,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from core import db_util
+
 log = logging.getLogger("stockai.collab")
 
 _SCHEMA = """
@@ -67,7 +69,7 @@ def _db() -> Path:
 
 
 def _conn():
-    conn = sqlite3.connect(_db())
+    conn = db_util.connect(_db(), retries=3)
     conn.executescript(_SCHEMA)
     return conn
 

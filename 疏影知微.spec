@@ -21,6 +21,8 @@ hiddenimports = []
 # collect_submodules 一网打尽，彻底杜绝 ModuleNotFoundError
 hiddenimports += collect_submodules('app')
 hiddenimports += collect_submodules('config_manager')
+# 统一工具层（tools/ 为新包，静态分析扫不到）
+hiddenimports += collect_submodules('tools')
 tmp_ret = collect_all('akshare')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('py_mini_racer')
@@ -82,6 +84,14 @@ hiddenimports += [
     # 本轮（第17轮）新增模块（均为函数内延迟 import，须显式收集）
     'core.chart_engine', 'core.data_connector', 'core.multimodal_parser',
     'core.pit_sources', 'core.compliance_qa', 'core.model_tier',
+    # 本轮（第19轮）：统一工具层 / 辩论引擎 / AST 前视审计 / 时间完整性 /
+    # 多源交叉核对 / SAFR 合规孪生
+    'core.chronoaudit', 'core.data_reconciler',
+    'core.quant.ast_bias_scan', 'core.agents.debate_engine',
+    'security.compliance_twin',
+    # 本轮（第20轮）：九维假设审计 / PIT 基准 / 红队对抗 / 置信度自评 / 统一 DB 入口
+    'core.db_util', 'core.quant.assumption_audit', 'core.quant.pit_benchmark',
+    'core.agents.self_assessment', 'security.adversarial_compliance',
     # PyQt6 UI 组件（必须显式收集）
     'PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui',
     'PyQt6.sip',

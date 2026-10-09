@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from core.config import DATA_DIR
+from core import db_util
 
 _ITER_DB = DATA_DIR / "text_grad_iterations.db"
 _SCHEMA = """
@@ -70,7 +71,7 @@ _PARAM_NEIGHBORS: Dict[str, List[Any]] = {
 
 def _conn() -> sqlite3.Connection:
     _ITER_DB.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(_ITER_DB, timeout=10)
+    con = db_util.connect(_ITER_DB, timeout=10, retries=3)
     con.executescript(_SCHEMA)
     return con
 

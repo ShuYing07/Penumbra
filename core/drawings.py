@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.config import DATA_DIR
+from core import db_util
 
 log = logging.getLogger("stockai.drawings")
 _DB = DATA_DIR / "drawings.db"
@@ -32,7 +33,7 @@ CREATE INDEX IF NOT EXISTS idx_drawings_ticker ON drawings(ticker);
 
 def _conn() -> sqlite3.Connection:
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB))
+    conn = db_util.connect(str(_DB), retries=3)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     return conn

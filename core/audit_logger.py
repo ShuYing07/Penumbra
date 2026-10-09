@@ -16,6 +16,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core import db_util
+
 log = logging.getLogger("stockai.audit")
 
 _SCHEMA = """
@@ -38,7 +40,7 @@ def _db_path() -> Path:
 
 
 def _conn():
-    conn = sqlite3.connect(_db_path())
+    conn = db_util.connect(_db_path(), retries=3)
     conn.execute(_SCHEMA)
     return conn
 

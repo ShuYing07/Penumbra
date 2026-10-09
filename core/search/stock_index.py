@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from core.config import DATA_DIR
+from core import db_util
 
 log = logging.getLogger("stockai.search")
 
@@ -84,7 +85,7 @@ def get_pinyin_abbr(name: str) -> str:
 
 # ---------- SQLite索引 ----------
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH))
+    conn = db_util.connect(str(_DB_PATH), retries=3)
     conn.execute("""CREATE TABLE IF NOT EXISTS stock_index (
         code TEXT, name TEXT, pinyin TEXT, market TEXT, ticker TEXT,
         PRIMARY KEY(code)

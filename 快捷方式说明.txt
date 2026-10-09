@@ -1,0 +1,1 @@
+请手动创建桌面快捷方式，指向: D:/StockAIPredictor/dist/疏影知微/疏影知微.exe

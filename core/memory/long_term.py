@@ -8,13 +8,14 @@ from pathlib import Path
 
 from core.config import now_cn
 from core.data.cache import get_conn
+from core import db_util
 
 _DB = Path.home() / ".shuying" / "memory.db"
 _DB.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _conn():
-    c = sqlite3.connect(str(_DB), timeout=30)
+    c = db_util.connect(str(_DB), timeout=30, retries=3)
     c.row_factory = sqlite3.Row
     return c
 
